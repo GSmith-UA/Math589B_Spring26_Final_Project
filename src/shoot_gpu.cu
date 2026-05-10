@@ -168,12 +168,17 @@ std::vector<FlagResult> shootAndFlagGPU(const std::vector<State>& seeds,
     int    *d_flagged;
 
     size_t sz = n * sizeof(double);
-    cudaMalloc(&d_th,  sz); cudaMalloc(&d_ph,  sz);
-    cudaMalloc(&d_l1,  sz); cudaMalloc(&d_l2,  sz);
-    cudaMalloc(&d_oth, sz); cudaMalloc(&d_oph, sz);
-    cudaMalloc(&d_ol1, sz); cudaMalloc(&d_ol2, sz);
-    cudaMalloc(&d_min_dist, sz);
-    cudaMalloc(&d_flagged, n * sizeof(int));
+    cudaError_t alloc_err = cudaSuccess;
+    alloc_err |= cudaMalloc(&d_th,  sz); alloc_err |= cudaMalloc(&d_ph,  sz);
+    alloc_err |= cudaMalloc(&d_l1,  sz); alloc_err |= cudaMalloc(&d_l2,  sz);
+    alloc_err |= cudaMalloc(&d_oth, sz); alloc_err |= cudaMalloc(&d_oph, sz);
+    alloc_err |= cudaMalloc(&d_ol1, sz); alloc_err |= cudaMalloc(&d_ol2, sz);
+    alloc_err |= cudaMalloc(&d_min_dist, sz);
+    alloc_err |= cudaMalloc(&d_flagged, n * sizeof(int));
+    if (alloc_err != cudaSuccess) {
+        std::fprintf(stderr, "[GPU ERROR] cudaMalloc failed for %d seeds\n", n);
+        return {};
+    }
 
     cudaMemcpy(d_th, h_th.data(), sz, cudaMemcpyHostToDevice);
     cudaMemcpy(d_ph, h_ph.data(), sz, cudaMemcpyHostToDevice);
@@ -191,6 +196,14 @@ std::vector<FlagResult> shootAndFlagGPU(const std::vector<State>& seeds,
         d_oth, d_oph, d_ol1, d_ol2);
 
     cudaDeviceSynchronize();
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[GPU ERROR] kernel failed: %s\n", cudaGetErrorString(err));
+        cudaFree(d_th);  cudaFree(d_ph);  cudaFree(d_l1);  cudaFree(d_l2);
+        cudaFree(d_oth); cudaFree(d_oph); cudaFree(d_ol1); cudaFree(d_ol2);
+        cudaFree(d_min_dist); cudaFree(d_flagged);
+        return {};
+    }
 
     // Copy results back
     std::vector<double> h_min(n), h_oth(n), h_oph(n), h_ol1(n), h_ol2(n);

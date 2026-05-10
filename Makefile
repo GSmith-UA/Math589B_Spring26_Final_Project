@@ -7,7 +7,12 @@ ARCH     ?= sm_70
 # Eigen: system default, override with: make EIGEN=/path/to/eigen3
 EIGEN    ?= /usr/include/eigen3
 
-NVCCFLAGS = -O3 -std=c++17 -arch=$(ARCH) -DUSE_GPU -I$(EIGEN) -Isrc
+# gencode sm_70: native V100 binary
+# gencode compute_60/code=compute_60: PTX fallback JIT-compiled for any sm_60+ GPU
+NVCCFLAGS = -O3 -std=c++17 -DUSE_GPU \
+            -gencode arch=compute_70,code=sm_70 \
+            -gencode arch=compute_60,code=compute_60 \
+            -I$(EIGEN) -Isrc
 
 SRC = src/main.cu          \
       src/solver.cu        \
