@@ -22,8 +22,9 @@ EIGEN := $(shell \
   done; \
   pkg-config --variable=includedir eigen3 2>/dev/null)
 endif
+# Final fallback: bundled headers in third_party/eigen3
 ifeq ($(EIGEN),)
-$(error Cannot find Eigen3. Run: module load eigen  OR  make EIGEN=/path/to/eigen3)
+EIGEN := third_party/eigen3
 endif
 
 # gencode sm_70: native V100 binary
