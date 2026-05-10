@@ -15,6 +15,7 @@ Result solve(double theta, double phi, double alpha) {
 #ifdef USE_GPU
     p.N_psi      = 500000;   // 500K seeds; doubles to 1M on pass 1
     p.max_passes = 3;        // dense seed grid needs fewer passes
+    p.max_steps  = 5;        // hard cap: never more than 5 continuation steps
 #else
     p.N_psi      = 500;
     p.max_passes = 10;

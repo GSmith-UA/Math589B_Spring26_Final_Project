@@ -6,6 +6,7 @@
 #include "manifold.h"
 #include <optional>
 #include <vector>
+#include <climits>
 
 struct ContinuationParams {
     double delta_step   = 0.01;    // max arc length per continuation step (theta units)
@@ -18,6 +19,7 @@ struct ContinuationParams {
     double epsilon_fwd  = 1e-4;    // forward integration acceptance criterion
     int    refine_iters = 3;       // number of refinement passes
     int    max_passes   = 10;      // max arc-refinement passes per continuation step
+    int    max_steps    = INT_MAX; // hard cap on continuation steps (0 = no cap)
     double epsilon_shrink = 0.5;   // tolerance shrink factor per refinement
     double alpha        = 0.1;     // damping
 };
