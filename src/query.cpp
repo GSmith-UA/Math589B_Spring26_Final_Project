@@ -45,7 +45,7 @@ QueryResult queryManifold(double theta_q, double phi_q,
     QueryResult best = {0.0, 0.0, 1e18, theta_q, 1e18, false};
 
     auto res = continuationWalk(theta_q, phi_q, params);
-    if (res.has_value() && res->accepted) {
+    if (res.has_value()) {
         double fwd  = validateCostate(theta_q, phi_q, res->lambda1, res->lambda2, params);
         double cost = computeCost(theta_q, phi_q, res->lambda1, res->lambda2, params);
         best = {res->lambda1, res->lambda2, fwd, theta_q, cost, true};

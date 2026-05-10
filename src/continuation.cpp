@@ -287,7 +287,9 @@ std::optional<CostateEstimate> continuationWalk(double theta_q, double phi_q,
         } else {
             std::fprintf(stderr, "[DBG] step %d REJECTED  resid=%.3e\n",
                          n, est.forward_residual);
-            return std::nullopt;
+            if (est.forward_residual < current.forward_residual)
+                current = est;
+            break;
         }
     }
     return current;
