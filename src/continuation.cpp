@@ -8,6 +8,13 @@
 #include <cstdio>
 #include <Eigen/Dense>
 
+#ifdef USE_GPU
+extern std::vector<FlagResult> shootAndFlagGPU(const std::vector<State>&,
+                                                double, double, double,
+                                                double, double, double);
+#define shootAndFlag shootAndFlagGPU
+#endif
+
 static double forwardResidual(double theta, double phi,
                                double lambda1, double lambda2,
                                const ContinuationParams& params) {

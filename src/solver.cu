@@ -5,15 +5,20 @@
 Result solve(double theta, double phi, double alpha) {
     ContinuationParams p;
     p.alpha      = alpha;
-    p.N_psi      = 500;
     p.h          = 1e-4;
     p.h_shoot    = 1e-4;
     p.delta_step = 0.01;
     p.T_max      = 30.0;
-    p.max_passes = 10;
     p.r          = 1e-3;
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
+#ifdef USE_GPU
+    p.N_psi      = 500000;   // 500K seeds; doubles to 1M on pass 1
+    p.max_passes = 3;        // dense seed grid needs fewer passes
+#else
+    p.N_psi      = 500;
+    p.max_passes = 10;
+#endif
 
     QueryResult qr = queryManifold(theta, phi, p);
 
