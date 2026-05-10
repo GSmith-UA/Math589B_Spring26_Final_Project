@@ -13,7 +13,7 @@ Result solve(double theta, double phi, double alpha) {
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi      = 50000;    // 50K seeds; doubles to 100K on pass 1
+    p.N_psi      = 100000;   // 100K seeds; doubles to 200K on pass 1
     p.max_passes = 3;        // dense seed grid needs fewer passes
     p.max_steps  = 5;        // hard cap: never more than 5 continuation steps
 #else
