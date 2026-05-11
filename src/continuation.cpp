@@ -117,7 +117,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
     std::vector<FlagResult> all_flags;
 
     for (int pass = 0; pass < params.max_passes; ++pass) {
-        int n_seeds = params.N_psi * std::min(1 << pass, 2);
+        int n_seeds = params.N_psi;
 
         auto seeds = generateSeedPointsArc(eigs, n_seeds, params.r,
                                            psi_center, arc, origin);
