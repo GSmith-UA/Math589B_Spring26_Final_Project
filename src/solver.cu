@@ -13,9 +13,9 @@ Result solve(double theta, double phi, double alpha) {
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi      = 100000;   // 100K seeds; doubles to 200K on pass 1
-    p.max_passes = 3;        // dense seed grid needs fewer passes
-    p.max_steps  = 5;        // hard cap: never more than 5 continuation steps
+    p.N_psi      = 500000;   // 500K seeds, single cold-start pass
+    p.max_passes = 1;        // one pass only — no doubling, ~10s per case
+    p.max_steps  = 1;        // direct shot, no continuation walk
 #else
     p.N_psi      = 500;
     p.max_passes = 10;
