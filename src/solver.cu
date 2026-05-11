@@ -1,20 +1,24 @@
 #include "solver.hpp"
 #include "query.h"
 #include "continuation.h"
+#include <cmath>
 
 Result solve(double theta, double phi, double alpha) {
+    // wrap theta to (-π, π] — dynamics and cost are 2π-periodic
+    theta = std::atan2(std::sin(theta), std::cos(theta));
+
     ContinuationParams p;
     p.alpha      = alpha;
     p.h          = 1e-4;
     p.h_shoot    = 1e-4;
     p.delta_step = 0.01;
-    p.T_max      = 15.0;
+    p.T_max      = 30.0;
     p.r          = 1e-3;
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi      = 1000000;  // 1M seeds per pass (T_max halved frees budget)
-    p.max_passes = 2;        // pass-0: 1M full 2π; pass-1: 1M π/2 refinement
+    p.N_psi      = 500000;   // 500K seeds per pass; pass-0: full 2π, pass-1: π/2 refinement
+    p.max_passes = 2;
     p.max_steps  = 1;        // direct cold start at target
 #else
     p.N_psi      = 500;
