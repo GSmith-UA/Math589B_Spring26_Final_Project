@@ -17,13 +17,19 @@ static double computeCost(double theta, double phi,
     double running_cost = 0.0;
     double cost_at_min  = 0.0;
 
+    auto evalL = [](const State& s) {
+        double th = s[0], ph = s[1], l2 = s[3];
+        double u = -l2 * std::cos(th);
+        return (1.0 - std::cos(th)) + 0.5*ph*ph + 0.5*u*u;
+    };
+    double L_prev = evalL(z);
+
     for (int s = 0; s < n_steps; ++s) {
         z = rk4Step(z, params.h, f);
 
-        double th = z[0], ph = z[1], l2 = z[3];
-        double u_star = -l2 * std::cos(th);
-        double L = (1.0 - std::cos(th)) + 0.5*ph*ph + 0.5*u_star*u_star;
-        running_cost += L * params.h;
+        double L = evalL(z);
+        running_cost += 0.5 * (L_prev + L) * params.h;
+        L_prev = L;
 
         double mag = 0.0;
         for (double v : z) mag += v * v;
