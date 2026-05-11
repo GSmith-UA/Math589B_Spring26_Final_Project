@@ -13,9 +13,9 @@ Result solve(double theta, double phi, double alpha) {
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi      = 500000;   // 500K seeds per pass
-    p.max_passes = 1;        // one pass per step, no doubling
-    p.max_steps  = 2;        // step 1 cold to midpoint (~10s), step 2 warm to target (~10s)
+    p.N_psi      = 750000;   // 750K seeds per pass
+    p.max_passes = 2;        // pass-0: 750K full 2π; pass-1: 750K π/2 refinement
+    p.max_steps  = 1;        // direct cold start at target
 #else
     p.N_psi      = 500;
     p.max_passes = 10;
