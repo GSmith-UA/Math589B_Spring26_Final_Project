@@ -13,8 +13,8 @@ Result solve(double theta, double phi, double alpha) {
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi      = 450000;   // pyramid: 150K→300K→450K across 3 passes (900K total)
-    p.max_passes = 3;        // pass-0: 150K 2π; pass-1: 300K π/2; pass-2: 450K π/2
+    p.N_psi      = 500000;   // 500K seeds per pass
+    p.max_passes = 2;        // pass-0: 500K full 2π; pass-1: 500K π/2 refinement
     p.max_steps  = 1;        // direct cold start at target
 #else
     p.N_psi      = 500;
