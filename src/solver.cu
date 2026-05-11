@@ -13,8 +13,8 @@ Result solve(double theta, double phi, double alpha) {
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi      = 750000;   // 750K seeds per pass
-    p.max_passes = 2;        // pass-0: 750K full 2π; pass-1: 750K π/2 refinement
+    p.N_psi      = 600000;   // 600K seeds per pass
+    p.max_passes = 2;        // pass-0: 600K full 2π; pass-1: 600K π/2 refinement
     p.max_steps  = 1;        // direct cold start at target
 #else
     p.N_psi      = 500;
