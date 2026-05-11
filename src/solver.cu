@@ -8,13 +8,13 @@ Result solve(double theta, double phi, double alpha) {
     p.h          = 1e-4;
     p.h_shoot    = 1e-4;
     p.delta_step = 0.01;
-    p.T_max      = 30.0;
+    p.T_max      = 15.0;
     p.r          = 1e-3;
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi      = 500000;   // 500K seeds per pass
-    p.max_passes = 2;        // pass-0: 500K full 2π; pass-1: 500K π/2 refinement
+    p.N_psi      = 1000000;  // 1M seeds per pass (T_max halved frees budget)
+    p.max_passes = 2;        // pass-0: 1M full 2π; pass-1: 1M π/2 refinement
     p.max_steps  = 1;        // direct cold start at target
 #else
     p.N_psi      = 500;
