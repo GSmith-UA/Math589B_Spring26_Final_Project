@@ -257,7 +257,7 @@ std::optional<CostateEstimate> continuationWalk(double theta_q, double phi_q,
     if (params.max_steps > 0) N = std::min(N, params.max_steps);
 
     std::array<double, 2> warm_start = {0.0, 0.0};
-    CostateEstimate current = {0.0, 0.0, 0.0, true, 0.0};
+    CostateEstimate current = {0.0, 0.0, 1e18, false, 0.0};
     double psi_center = 0.0;
 
     std::fprintf(stderr, "\n=== continuationWalk(%.4f,%.4f) N=%d ===\n",
