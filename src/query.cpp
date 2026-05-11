@@ -18,12 +18,12 @@ static double computeCost(double theta, double phi,
     double cost_at_min  = 0.0;
 
     for (int s = 0; s < n_steps; ++s) {
+        z = rk4Step(z, params.h, f);
+
         double th = z[0], ph = z[1], l2 = z[3];
         double u_star = -l2 * std::cos(th);
         double L = (1.0 - std::cos(th)) + 0.5*ph*ph + 0.5*u_star*u_star;
         running_cost += L * params.h;
-
-        z = rk4Step(z, params.h, f);
 
         double mag = 0.0;
         for (double v : z) mag += v * v;
