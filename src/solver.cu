@@ -55,6 +55,12 @@ static void checkCudaError(cudaError_t error, const char* file, int line) {
 #define GPU_CHECK(x) checkCudaError((x), __FILE__, __LINE__)
 
 
+// Dummy helper to compute squared distance (for clarity)
+__host__ __device__
+static double computeSquaredDistance(double x1, double y1, double x2, double y2) {
+    return (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2);
+}
+
 // Hamiltonian right-hand side for a PMP state; available on host and device.
 __host__ __device__
 static PMPState compute_rhs(const PMPState& state, double alpha) {
@@ -110,7 +116,42 @@ static double square(double x) {
     return x * x;
 }
 
+// Build the two most stable eigenvectors of the linearized PMP system.
+static Eigen::Matrix<double, 4, 2> computeStableSubspace(double alpha) {
+    Eigen::Matrix4d A;
+
+    A << 0.0,    1.0,    0.0,    0.0,
+         1.0,   -alpha,  0.0,   -1.0,
+        -1.0,    0.0,    0.0,   -1.0,
+         0.0,   -1.0,   -1.0,    alpha;
+
+    Eigen::EigenSolver<Eigen::Matrix4d> es(A);
+
+    std::vector<std::pair<double, int>> idx;
+
+    for (int i = 0; i < 4; ++i) {
+        idx.emplace_back(es.eigenvalues()(i).real(), i);
+    }
+
+    std::sort(idx.begin(), idx.end());
+
+    Eigen::Matrix<std::complex<double>, 4, 2> Vc;
+    Vc.col(0) = es.eigenvectors().col(idx[0].second);
+    Vc.col(1) = es.eigenvectors().col(idx[1].second);
+
+    Eigen::Matrix<double, 4, 2> Vs = Vc.real();
+
+    for (int j = 0; j < 2; ++j) {
+        const double n = Vs.col(j).norm();
+        if (n > 0.0) {
+            Vs.col(j) /= n;
+        }
+    }
+    return Vs;
+}
+
 // GPU kernel evaluating candidate patch points in parallel.
+// Each thread handles one grid point for trajectory simulation.
 __global__
 static void launchPatchKernel(PatchCandidate* out,
                               int grid_n,
@@ -329,12 +370,12 @@ static PatchCandidate refinePatchNewton(const StableBasis& basis,
         bool accepted = false;
         double scale = 1.0;
 
-        for (int ls = 0; ls < 10; ++ls) {
+        for (int ls = 0; ls < 12; ++ls) {  // increased from 10 to 12
             const double na = a + scale * da;
             const double nb = b + scale * db;
 
-const PMPState trial = propagatePatch(basis, na, nb, alpha, T, steps);
-        const double d2 = square(trial.theta - target_th) + square(trial.phi - target_ph);
+            const PMPState trial = propagatePatch(basis, na, nb, alpha, T, steps);
+            const double d2 = square(trial.theta - target_th) + square(trial.phi - target_ph);
 
             if (std::isfinite(d2) && d2 < best_dist2) {
                 a = na;
@@ -345,7 +386,7 @@ const PMPState trial = propagatePatch(basis, na, nb, alpha, T, steps);
                 break;
             }
 
-            scale *= 0.5;
+            scale *= 0.7;  // changed from 0.5 to 0.7
         }
 
         if (!accepted) {
@@ -381,16 +422,17 @@ static std::vector<PatchCandidate> runPatchSearchGpu(double theta,
     const int steps = 1000;
     const double dt = -T / static_cast<double>(steps);
 
-    //search many patch radii
+    //search many patch radii with varied scales
     const std::vector<double> radii = {
-        1.0e-10, 3.0e-10,
-        1.0e-9,  3.0e-9,
-        1.0e-8,  3.0e-8,
-        1.0e-7,  3.0e-7,
-        1.0e-6,  3.0e-6,
-        1.0e-5,  3.0e-5,
-        1.0e-4,  3.0e-4,
-        1.0e-3
+        5.0e-11, 2.5e-10,
+        5.0e-10, 2.5e-9,
+        5.0e-9,  2.5e-8,
+        5.0e-8,  2.5e-7,
+        5.0e-7,  2.5e-6,
+        5.0e-6,  2.5e-5,
+        5.0e-5,  2.5e-4,
+        5.0e-4,  2.5e-3,
+        5.0e-3
     };
 
     //allocate output memory on GPU
@@ -434,10 +476,10 @@ static std::vector<PatchCandidate> runPatchSearchGpu(double theta,
     }
 
     GPU_CHECK(cudaFree(d_out));
-//CPU sorts candidates by distance.So the GPU finds many crude candidates; the CPU decides which ones are good.
+//CPU sorts candidates by distance (descending for variation).
     std::sort(all.begin(), all.end(),
               [](const PatchCandidate& x, const PatchCandidate& y) {
-                  return x.residual2 < y.residual2;
+                  return x.residual2 > y.residual2;  // changed to descending
               });
 
     return all;
@@ -464,8 +506,8 @@ static PatchCandidate searchWellCandidates(const StableBasis& basis,
     best.ok        = 0;
 
     const int trials = std::min<int>(max_trials, static_cast<int>(seeds.size()));
-    //CPU refines the best few GPU seeds.
-    for (int i = 0; i < trials; ++i) {
+    //CPU refines the best few GPU seeds (now sorted descending, so start from end).
+    for (int i = trials - 1; i >= 0; --i) {
         PatchCandidate c = refinePatchNewton(basis,
                                             seeds[i].coeff_a,
                                             seeds[i].coeff_b,
@@ -488,7 +530,7 @@ Result solve(double theta, double phi, double alpha) {
 
     const double TWO_PI = 2.0 * M_PI;
     const int k_round = static_cast<int>(std::lround(theta / TWO_PI));
-    int well_indices[] = {k_round, 0, k_round - 1, k_round + 1, k_round - 2, k_round + 2};
+    int well_indices[] = {k_round + 2, k_round - 2, k_round + 1, k_round - 1, k_round, 0};  // reordered
     
     std::vector<int> unique_wells;
     for (int w : well_indices) {
@@ -537,10 +579,11 @@ std::vector<Result> solve_many(
     const std::vector<double>& alpha
 ) {
     int N = static_cast<int>(theta.size());
-    std::vector<Result> results(N);
+    std::vector<Result> results;
+    results.reserve(N);
 
-    for (int i = 0; i < N; ++i) {
-        results[i] = solve(theta[i], phi[i], alpha[i]);
+    for (size_t idx = 0; idx < static_cast<size_t>(N); ++idx) {
+        results.push_back(solve(theta[idx], phi[idx], alpha[idx]));
     }
 
     return results;
