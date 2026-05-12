@@ -12,7 +12,7 @@ Result solve(double theta, double phi, double alpha) {
     p.h          = 1e-4;
     p.h_shoot    = 2.5e-4;
     p.delta_step = 0.01;
-    p.T_max      = 15.0;
+    p.T_max      = 25.0;
     p.r          = 1e-3;
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
