@@ -15,7 +15,7 @@ Result solve(double theta, double phi, double alpha) {
     ContinuationParams p;
     p.alpha      = alpha;
     p.h          = 1e-4;
-    p.h_shoot    = 1.5e-4;
+    p.h_shoot    = 2.0e-4;
     p.delta_step = 0.01;
     p.T_max      = 25.0;
     p.r          = 1e-3;
