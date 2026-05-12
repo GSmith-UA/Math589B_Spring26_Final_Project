@@ -295,126 +295,91 @@ CostateEstimate solveAtPoint(double theta, double phi,
     if (cold_start && params.N_psi_refine > 0) {
         psi_center = 0.0;
 
-        // Pass 0: full 2π sweep
-        int n_seeds0 = params.N_psi;
-        auto seeds0  = generateSeedPointsArc(eigs, n_seeds0, params.r, 0.0, 2*M_PI, origin);
-        auto raw0    = shootAndFlag(seeds0, theta, phi, alpha, params.T_max, h_s, flag_tol);
+        // Multi-scale 2D grid sweep: 15 radii × 49×49 seeds.
+        // Coarse backward integration (T=16, 1000 steps) to find seeds that
+        // pass near the target; Newton refinement in λ-space on the best ones.
+        static const double RADII[] = {
+            1e-10, 3e-10, 1e-9,  3e-9,
+            1e-8,  3e-8,  1e-7,  3e-7,
+            1e-6,  3e-6,  1e-5,  3e-5,
+            1e-4,  3e-4,  1e-3
+        };
+        const int    N_RADII   = 15;
+        const int    GRID_N    = 49;
+        const double T_COARSE  = 16.0;
+        const double H_COARSE  = T_COARSE / 1000.0;  // 0.016 → 1000 steps
 
-        std::vector<FlagResult> pass0_flags;
-        std::vector<double>     pass0_psi;
-        double     p0_best_dist = 1e18;
-        double     p0_best_psi  = 0.0;
-        FlagResult p0_best_fr;
-        bool       p0_has_best  = false;
+        std::vector<FlagResult> sweep_flags;
 
-        for (int i = 0; i < (int)raw0.size(); ++i) {
-            if (!raw0[i].flagged) continue;
-            double l1 = raw0[i].state_at_flag[2];
-            double l2 = raw0[i].state_at_flag[3];
-            if (std::abs(l1) > 25.0 || std::abs(l2) > 25.0) continue;
-            double psi_i = 2*M_PI * (i - n_seeds0 / 2.0) / n_seeds0;
-            pass0_flags.push_back(raw0[i]);
-            pass0_psi.push_back(psi_i);
-            if (raw0[i].min_dist < p0_best_dist) {
-                p0_best_dist = raw0[i].min_dist;
-                p0_best_psi  = psi_i;
-                p0_best_fr   = raw0[i];
-                p0_has_best  = true;
+        for (int ri = 0; ri < N_RADII; ++ri) {
+            auto seeds = generateSeedPointsGrid(eigs, GRID_N, RADII[ri], origin);
+            auto raw   = shootAndFlag(seeds, theta, phi, alpha,
+                                      T_COARSE, H_COARSE, flag_tol);
+            for (auto& fr : raw) {
+                if (!fr.flagged) continue;
+                double l1 = fr.state_at_flag[2], l2 = fr.state_at_flag[3];
+                if (std::abs(l1) > 25.0 || std::abs(l2) > 25.0) continue;
+                sweep_flags.push_back(fr);
             }
         }
 
-        if (p0_has_best) {
-            const State& st = p0_best_fr.state_at_flag;
+        // Sort by closest approach distance so the best seeds come first.
+        std::sort(sweep_flags.begin(), sweep_flags.end(),
+                  [](const FlagResult& a, const FlagResult& b) {
+                      return a.min_dist < b.min_dist; });
+
+        // Direct (no Newton) pass on top flags.
+        const int MAX_DIRECT = 6;
+        int n_direct = std::min(MAX_DIRECT, (int)sweep_flags.size());
+        for (int i = 0; i < n_direct; ++i) {
+            const State& st = sweep_flags[i].state_at_flag;
             double resid = forwardResidual(theta, phi, st[2], st[3], params);
             if (resid < best.forward_residual)
-                best = {st[2], st[3], resid, resid < params.epsilon_fwd, p0_best_psi};
-            psi_center = p0_best_psi;
+                best = {st[2], st[3], resid, resid < params.epsilon_fwd, 0.0};
         }
 
-        // LS from pass0 flags alone
-        LSResult ls0 = runLS(pass0_flags, theta, phi, drop_phi);
-        if (ls0.ok) {
-            double resid = forwardResidual(theta, phi, ls0.l1, ls0.l2, params);
-            if (resid < best.forward_residual)
-                best = {ls0.l1, ls0.l2, resid, resid < params.epsilon_fwd, best.best_psi};
+        // LS from all sweep flags.
+        if (!sweep_flags.empty()) {
+            LSResult ls = runLS(sweep_flags, theta, phi, drop_phi);
+            if (ls.ok) {
+                double resid = forwardResidual(theta, phi, ls.l1, ls.l2, params);
+                if (resid < best.forward_residual)
+                    best = {ls.l1, ls.l2, resid, resid < params.epsilon_fwd, 0.0};
+            }
         }
 
         if (best.accepted) return best;
 
-        // Find K=3 diverse wells from pass0_flags (psi_gap = π/3)
-        const int    K_wells = 3;
-        const double psi_gap = M_PI / 3.0;
-        double well_psi_arr[3];
-        int    n_wells = 0;
-        std::vector<bool> well_excl(pass0_flags.size(), false);
-
-        for (int k = 0; k < K_wells; ++k) {
-            int    widx  = -1;
-            double wdist = 1e18;
-            for (int i = 0; i < (int)pass0_flags.size(); ++i) {
-                if (!well_excl[i] && pass0_flags[i].min_dist < wdist) {
-                    wdist = pass0_flags[i].min_dist; widx = i;
-                }
+        // Newton refinement from up to 6 diverse seeds (spread in λ-space).
+        const int    MAX_NEWTON = 6;
+        const double LAMBDA_GAP = 1e-2;  // min separation in (λ1,λ2) to count as diverse
+        std::vector<const FlagResult*> newton_seeds;
+        for (auto& fr : sweep_flags) {
+            bool too_close = false;
+            for (auto* nfr : newton_seeds) {
+                double dl1 = fr.state_at_flag[2] - nfr->state_at_flag[2];
+                double dl2 = fr.state_at_flag[3] - nfr->state_at_flag[3];
+                if (std::sqrt(dl1*dl1 + dl2*dl2) < LAMBDA_GAP) { too_close = true; break; }
             }
-            if (widx < 0) break;
-            well_psi_arr[n_wells++] = pass0_psi[widx];
-            for (int i = 0; i < (int)pass0_flags.size(); ++i) {
-                double dp = std::abs(pass0_psi[i] - pass0_psi[widx]);
-                if (dp > M_PI) dp = 2*M_PI - dp;
-                if (dp < psi_gap) well_excl[i] = true;
-            }
+            if (!too_close) newton_seeds.push_back(&fr);
+            if ((int)newton_seeds.size() >= MAX_NEWTON) break;
         }
 
-        // Per-well: π/3 arc refinement → combined LS → Newton
-        int n_refine = params.N_psi_refine;
-        for (int k = 0; k < n_wells && !best.accepted; ++k) {
-            double wc = well_psi_arr[k];
-
-            auto wseeds = generateSeedPointsArc(eigs, n_refine, params.r, wc, M_PI/3.0, origin);
-            auto wraw   = shootAndFlag(wseeds, theta, phi, alpha, params.T_max, h_s, flag_tol);
-
-            std::vector<FlagResult> refine_flags;
-            double     w_best_dist = 1e18;
-            FlagResult w_best_fr;
-            bool       w_has_best  = false;
-
-            for (int i = 0; i < (int)wraw.size(); ++i) {
-                if (!wraw[i].flagged) continue;
-                double l1 = wraw[i].state_at_flag[2];
-                double l2 = wraw[i].state_at_flag[3];
-                if (std::abs(l1) > 25.0 || std::abs(l2) > 25.0) continue;
-                refine_flags.push_back(wraw[i]);
-                if (wraw[i].min_dist < w_best_dist) {
-                    w_best_dist = wraw[i].min_dist;
-                    w_best_fr   = wraw[i];
-                    w_has_best  = true;
-                }
-            }
-
-            if (w_has_best) {
-                const State& st = w_best_fr.state_at_flag;
-                double resid = forwardResidual(theta, phi, st[2], st[3], params);
-                if (resid < best.forward_residual)
-                    best = {st[2], st[3], resid, resid < params.epsilon_fwd, wc};
-            }
-            if (best.accepted) break;
-
-            // Combined LS: pass0 + well refinement
-            std::vector<FlagResult> combined = pass0_flags;
-            combined.insert(combined.end(), refine_flags.begin(), refine_flags.end());
-
-            LSResult ls = runLS(combined, theta, phi, drop_phi);
-            if (ls.ok) {
-                double resid = forwardResidual(theta, phi, ls.l1, ls.l2, params);
-                if (resid < best.forward_residual)
-                    best = {ls.l1, ls.l2, resid, resid < params.epsilon_fwd, wc};
-            }
-            if (best.accepted) break;
-
-            // Newton from best estimate (may be LS result or raw flag)
-            CostateEstimate nr = newtonRefine(theta, phi, best.lambda1, best.lambda2, params);
+        for (auto* nfr : newton_seeds) {
+            CostateEstimate nr = newtonRefine(theta, phi,
+                                              nfr->state_at_flag[2],
+                                              nfr->state_at_flag[3], params);
             if (nr.forward_residual < best.forward_residual)
-                best = {nr.lambda1, nr.lambda2, nr.forward_residual, nr.accepted, best.best_psi};
+                best = {nr.lambda1, nr.lambda2, nr.forward_residual, nr.accepted, 0.0};
+            if (best.accepted) break;
+        }
+
+        // One final Newton from the current best estimate if still not converged.
+        if (!best.accepted && (best.lambda1 != 0.0 || best.lambda2 != 0.0)) {
+            CostateEstimate nr = newtonRefine(theta, phi,
+                                              best.lambda1, best.lambda2, params);
+            if (nr.forward_residual < best.forward_residual)
+                best = {nr.lambda1, nr.lambda2, nr.forward_residual, nr.accepted, 0.0};
         }
 
         return best;
@@ -555,7 +520,9 @@ CostateEstimate solveAtPoint(double theta, double phi,
 std::optional<CostateEstimate> continuationWalk(double theta_q, double phi_q,
                                                  const ContinuationParams& params,
                                                  std::vector<StiffnessRecord>* stiffness_out) {
-    double delta_theta = shortestArc(0.0, theta_q);
+    // Use theta_q directly (not shortest arc) so the walk targets the actual
+    // theta on the real line rather than wrapping it to (-π, π].
+    double delta_theta = theta_q;
     double arc         = std::max(std::abs(delta_theta), std::abs(phi_q));
     int    N           = std::max(1, static_cast<int>(
                              std::ceil(arc / params.delta_step)));

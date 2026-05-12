@@ -147,6 +147,30 @@ std::vector<State> generateSeedPointsArc(const EigenpairResult& eigenpairs,
     return seeds;
 }
 
+std::vector<State> generateSeedPointsGrid(const EigenpairResult& eigenpairs,
+                                           int grid_n, double radius,
+                                           const State& center) {
+    const State& v1 = eigenpairs.eigenvectors[0];
+    const State& v2 = eigenpairs.eigenvectors[1];
+
+    std::vector<State> seeds;
+    seeds.reserve(grid_n * grid_n);
+
+    for (int i = 0; i < grid_n; ++i) {
+        double xi = (grid_n > 1) ? -1.0 + 2.0 * i / (grid_n - 1) : 0.0;
+        double a  = radius * xi;
+        for (int j = 0; j < grid_n; ++j) {
+            double xj = (grid_n > 1) ? -1.0 + 2.0 * j / (grid_n - 1) : 0.0;
+            double b  = radius * xj;
+            State s;
+            for (int k = 0; k < 4; ++k)
+                s[k] = center[k] + v1[k] * a + v2[k] * b;
+            seeds.push_back(s);
+        }
+    }
+    return seeds;
+}
+
 std::vector<FlagResult> shootAndFlag(const std::vector<State>& seeds,
                                       double target_theta, double target_phi,
                                       double alpha, double T_max, double h,

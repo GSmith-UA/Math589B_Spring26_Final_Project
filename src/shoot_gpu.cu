@@ -10,11 +10,11 @@
 // Device helpers
 // ---------------------------------------------------------------------------
 
-__device__ static double d_wrappedDist(double a, double b) {
-    double d = a - b;
-    // bring to (-pi, pi]
-    d -= 2.0 * M_PI * floor((d + M_PI) / (2.0 * M_PI));
-    return fabs(d);
+// Straight (non-wrapped) distance in theta.  We need this because the
+// k-loop in solver.cu passes theta_eff values on the real line; wrapped
+// distance would conflate theta=6 with theta=-0.28, giving wrong costates.
+__device__ static double d_thetaDist(double a, double b) {
+    return fabs(a - b);
 }
 
 // Backward dynamics: dz/dt = -forwardDynamics(z, alpha)
@@ -97,12 +97,12 @@ __global__ void shootKernel(
 
         d_rk4(&th, &ph, &l1, &l2, h, alpha);
 
-        double dtheta = d_wrappedDist(th, target_th);
+        double dtheta = d_thetaDist(th, target_th);
         double dphi   = ph - target_ph;
         double dist   = sqrt(dtheta * dtheta + dphi * dphi);
 
         // Sub-step linear interpolation for closest approach
-        double a  = d_wrappedDist(prev_th, target_th);
+        double a  = d_thetaDist(prev_th, target_th);
         double b  = prev_ph - target_ph;
         double da = dtheta - a;
         double db = dphi   - b;
@@ -118,7 +118,7 @@ __global__ void shootKernel(
                 double iph = prev_ph + t*(ph - prev_ph);
                 double il1 = prev_l1 + t*(l1 - prev_l1);
                 double il2 = prev_l2 + t*(l2 - prev_l2);
-                double di  = d_wrappedDist(ith, target_th);
+                double di  = d_thetaDist(ith, target_th);
                 double dj  = iph - target_ph;
                 double di2 = sqrt(di*di + dj*dj);
                 if (di2 < best_dist) {

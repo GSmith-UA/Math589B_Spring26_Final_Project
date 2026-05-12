@@ -36,6 +36,13 @@ std::vector<State> generateSeedPointsArc(const EigenpairResult& eigenpairs,
                                           double psi_center, double arc,
                                           const State& center);
 
+// Generate seeds on a 2D grid_n×grid_n grid in the stable eigenplane.
+// a ∈ [-radius, radius], b ∈ [-radius, radius].
+// z_seed(i,j) = center + v1*a + v2*b  (no exp pre-scaling; caller sweeps radii).
+std::vector<State> generateSeedPointsGrid(const EigenpairResult& eigenpairs,
+                                           int grid_n, double radius,
+                                           const State& center);
+
 struct FlagResult {
     bool   flagged;
     State  state_at_flag;   // z value when proximity was triggered
