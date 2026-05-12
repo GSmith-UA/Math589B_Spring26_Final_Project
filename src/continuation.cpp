@@ -182,7 +182,10 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
         if (pass_has_best) {
             psi_center = pass_best_psi;
-            arc        = M_PI / 2.0;
+            // pass 0 (2π) → π/2; subsequent passes halve further, floor at π/8
+            arc = (arc > M_PI / 2.0 + 1e-9)
+                      ? M_PI / 2.0
+                      : std::max(arc / 2.0, M_PI / 8.0);
         } else {
             arc = std::min(arc * 2.0, 2.0 * M_PI);
         }
