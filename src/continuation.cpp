@@ -311,19 +311,19 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
         std::vector<FlagResult> sweep_flags;
 
-        // Use a generous flag tolerance for the coarse sweep: grid spacing at
-        // the right radius is ~0.04·‖(θ,φ)‖, so 1e-2 misses everything.
-        // 0.5 captures seeds whose trajectories pass within 0.5 of the target;
-        // Newton refinement then tightens the solution.
-        const double COARSE_TOL = 0.5;
-
+        // No flag threshold: collect every seed's closest-approach state, sort
+        // by min_dist, and give Newton the best ones.  A threshold only hurts —
+        // it discards seeds that are still close enough for Newton to converge.
+        // Large epsilon ensures the kernel's early-exit still fires (dist > 2·min)
+        // but nothing is thrown away by the flagged check.
         for (int ri = 0; ri < N_RADII; ++ri) {
             auto seeds = generateSeedPointsGrid(eigs, GRID_N, RADII[ri], origin);
             auto raw   = shootAndFlag(seeds, theta, phi, alpha,
-                                      T_COARSE, H_COARSE, COARSE_TOL);
+                                      T_COARSE, H_COARSE, 1e9);
             for (auto& fr : raw) {
-                if (!fr.flagged) continue;
+                if (!std::isfinite(fr.min_dist)) continue;
                 double l1 = fr.state_at_flag[2], l2 = fr.state_at_flag[3];
+                if (!std::isfinite(l1) || !std::isfinite(l2)) continue;
                 if (std::abs(l1) > 50.0 || std::abs(l2) > 50.0) continue;
                 sweep_flags.push_back(fr);
             }
