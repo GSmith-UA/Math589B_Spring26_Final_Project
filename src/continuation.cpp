@@ -68,7 +68,7 @@ static CostateEstimate newtonRefine(double theta, double phi,
     double best_resid = forwardResidual(theta, phi, l1, l2, params);
     double best_l1 = l1, best_l2 = l2;
 
-    for (int iter = 0; iter < 5 && best_resid > params.epsilon_fwd; ++iter) {
+    for (int iter = 0; iter < 14 && best_resid > params.epsilon_fwd; ++iter) {
         double th = theta, ph = phi, lam1 = l1, lam2 = l2;
         // Φ columns: pa = dz/dl1(0), pb = dz/dl2(0)
         double pa[4] = {0, 0, 1, 0};
@@ -296,7 +296,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
         psi_center = 0.0;
 
         // Multi-scale 2D grid sweep: 15 radii × 49×49 seeds.
-        // Coarse backward integration (T=16, 1000 steps) to find seeds that
+        // Backward integration over full T_max (2500 steps) to find seeds that
         // pass near the target; Newton refinement in λ-space on the best ones.
         static const double RADII[] = {
             1e-10, 3e-10, 1e-9,  3e-9,
@@ -306,8 +306,8 @@ CostateEstimate solveAtPoint(double theta, double phi,
         };
         const int    N_RADII   = 15;
         const int    GRID_N    = 49;
-        const double T_COARSE  = 16.0;
-        const double H_COARSE  = T_COARSE / 1000.0;  // 0.016 → 1000 steps
+        const double T_COARSE  = params.T_max;
+        const double H_COARSE  = T_COARSE / 2500.0;  // 2500 steps across full horizon
 
         std::vector<FlagResult> sweep_flags;
 
@@ -335,7 +335,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
                       return a.min_dist < b.min_dist; });
 
         // Direct (no Newton) pass on top flags.
-        const int MAX_DIRECT = 6;
+        const int MAX_DIRECT = 12;
         int n_direct = std::min(MAX_DIRECT, (int)sweep_flags.size());
         for (int i = 0; i < n_direct; ++i) {
             const State& st = sweep_flags[i].state_at_flag;
@@ -356,18 +356,11 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
         if (best.accepted) return best;
 
-        // Newton refinement from up to 6 diverse seeds (spread in λ-space).
-        const int    MAX_NEWTON = 6;
-        const double LAMBDA_GAP = 1e-2;  // min separation in (λ1,λ2) to count as diverse
+        // Newton refinement from top seeds sorted by min_dist (already sorted).
+        const int MAX_NEWTON = 12;
         std::vector<const FlagResult*> newton_seeds;
         for (auto& fr : sweep_flags) {
-            bool too_close = false;
-            for (auto* nfr : newton_seeds) {
-                double dl1 = fr.state_at_flag[2] - nfr->state_at_flag[2];
-                double dl2 = fr.state_at_flag[3] - nfr->state_at_flag[3];
-                if (std::sqrt(dl1*dl1 + dl2*dl2) < LAMBDA_GAP) { too_close = true; break; }
-            }
-            if (!too_close) newton_seeds.push_back(&fr);
+            newton_seeds.push_back(&fr);
             if ((int)newton_seeds.size() >= MAX_NEWTON) break;
         }
 
