@@ -284,9 +284,9 @@ static PatchCandidate refinePatchNewton(const StableBasis& basis,
                                           double target_th,
                                           double target_ph,
                                           double alpha) {
-    const double T = 16.0;
+    const double T = 20.0;
     const int steps = 2600;
-    const int max_iter = 14;
+    const int max_iter = 10;
 
     double a = a0;
     double b = b0;
@@ -375,11 +375,11 @@ static std::vector<PatchCandidate> runPatchSearchGpu(double theta,
                                                          double phi,
                                                          double alpha,
                                                          const StableBasis& basis) {
-    const int grid_n = 49; 
+    const int grid_n = 64; 
     //we will search a 49x49 grid of initial conditions on the stable manifold patch, this number is somewhat arbitrary but it seems to give good coverage of the patch without being too slow.
     //also set backwards integration time and step size for coarse GPU search 
     const int n = grid_n * grid_n;
-    const double T = 16.0;
+    const double T = 20.0;
     const int steps = 1000;
     const double dt = -T / static_cast<double>(steps);
 
@@ -518,7 +518,7 @@ Result solve(double theta, double phi, double alpha) {
     best_global.ok        = 0;
     int best_k = 0;
 
-    const double DIST2_OK = 1.0e-10;
+    const double DIST2_OK = 1.0e-9;
 
     for (int k : k_candidates) {
         const double theta_eff = theta - TWO_PI * static_cast<double>(k);
