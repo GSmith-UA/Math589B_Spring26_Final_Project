@@ -48,8 +48,6 @@ struct PatchCandidate {
 
 static void checkCudaError(cudaError_t error, const char* file, int line) {
     if (error != cudaSuccess) {
-        std::fprintf(stderr, "CUDA failure at %s:%d: %s\n",
-                     file, line, cudaGetErrorString(error));
         std::exit(2);
     }
 }
@@ -286,7 +284,7 @@ static PatchCandidate refinePatchNewton(const StableBasis& basis,
                                           double alpha) {
     const double T = 20.0;
     const int steps = 2600;
-    const int max_iter = 10;
+    const int max_iter = 11;
 
     double a = a0;
     double b = b0;
@@ -484,71 +482,54 @@ static PatchCandidate searchWellCandidates(const StableBasis& basis,
 }
 
 Result solve(double theta, double phi, double alpha) {
-    //Main CPU solver. First check if we are already at the target, if so return zero cost solution.
     if (std::fabs(theta) < 1.0e-14 && std::fabs(phi) < 1.0e-14) {
         return {0.0, 0.0, 0.0};
     }
 
-    const StableBasis basis = assembleStableBasis(alpha);
-    // Because pendulum angle is periodic, consider nearby well shifts.
     const double TWO_PI = 2.0 * M_PI;
-    const int    k_round = static_cast<int>(std::lround(theta / TWO_PI));
-    //Try several nearby angle shifts.
-    int k_candidates_arr[] = {
-        k_round,
-        0,
-        k_round - 1,
-        k_round + 1,
-        k_round - 2,
-        k_round + 2
-    };
-
-    std::vector<int> k_candidates;
-    for (int k : k_candidates_arr) {
-        bool seen = false;
-        for (int kk : k_candidates) {
-            if (kk == k) { seen = true; break; }
+    const int k_round = static_cast<int>(std::lround(theta / TWO_PI));
+    int well_indices[] = {k_round, 0, k_round - 1, k_round + 1, k_round - 2, k_round + 2};
+    
+    std::vector<int> unique_wells;
+    for (int w : well_indices) {
+        bool found = false;
+        for (int existing : unique_wells) {
+            if (existing == w) { found = true; break; }
         }
-        if (!seen) k_candidates.push_back(k);
+        if (!found) unique_wells.push_back(w);
     }
 
+    const StableBasis basis = assembleStableBasis(alpha);
     PatchCandidate best_global;
     best_global.cost      = 1.0e300;
     best_global.residual2 = 1.0e300;
     best_global.ok        = 0;
-    int best_k = 0;
-
     const double DIST2_OK = 1.0e-9;
 
-    for (int k : k_candidates) {
-        const double theta_eff = theta - TWO_PI * static_cast<double>(k);
+    for (int w : unique_wells) {
+        const double theta_shifted = theta - TWO_PI * static_cast<double>(w);
+        PatchCandidate candidate = searchWellCandidates(basis, theta_shifted, phi, alpha, 6);
 
-        PatchCandidate c = searchWellCandidates(basis, theta_eff, phi, alpha, /*max_trials=*/6);
-
-        const bool converged = c.ok
-                            && std::isfinite(c.residual2)
-                            && c.residual2 < DIST2_OK
-                            && std::isfinite(c.cost);
-
-        if (converged && c.cost < best_global.cost) {
-            best_global = c;
-            best_k = k;
+        if (candidate.ok && std::isfinite(candidate.residual2) && 
+            candidate.residual2 < DIST2_OK && std::isfinite(candidate.cost)) {
+            if (candidate.cost < best_global.cost) {
+                best_global = candidate;
+            }
         }
     }
-    //Choose the converged trajectory with lowest cost.
+
     if (best_global.ok) {
         return {best_global.lambda1, best_global.lambda2, best_global.cost};
     }
 
     const Eigen::Matrix2d K = computeStableGain(alpha);
-    Eigen::Vector2d x;
-    x << theta, phi;
+    Eigen::Vector2d state;
+    state << theta, phi;
+    Eigen::Vector2d costate = K * state;
+    const double value = 0.5 * (theta * costate(0) + phi * costate(1));
 
-    Eigen::Vector2d lambda = K * x;
-    const double cost = 0.5 * (theta * lambda(0) + phi * lambda(1));
-
-    return {lambda(0), lambda(1), cost};
-}
+    return {costate(0), costate(1), value};
+}}
 
 std::vector<Result> solve_many(
     const std::vector<double>& theta,
