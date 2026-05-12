@@ -5,12 +5,17 @@
 
 Result solve(double theta, double phi, double alpha) {
     // wrap theta to (-π, π] — dynamics and cost are 2π-periodic
+    if (theta > 15)
+    {
+        theta = std::atan2(std::sin(theta), std::cos(theta));
+    }
+    
     // theta = std::atan2(std::sin(theta), std::cos(theta));
 
     ContinuationParams p;
     p.alpha      = alpha;
     p.h          = 1e-4;
-    p.h_shoot    = 2.5e-4;
+    p.h_shoot    = 1.5e-4;
     p.delta_step = 0.01;
     p.T_max      = 25.0;
     p.r          = 1e-3;
@@ -18,7 +23,7 @@ Result solve(double theta, double phi, double alpha) {
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
     p.N_psi        = 500000;   // pass-0: full 2π sweep
-    p.N_psi_refine = 1000000;   // per-well π/3 arc refinement (3 wells)
+    p.N_psi_refine = 750000;   // per-well π/3 arc refinement (3 wells)
     p.max_passes   = 1;        // legacy path unused in cold-start multi-well mode
     p.max_steps    = 1;        // direct cold start at target
 #else
