@@ -17,7 +17,7 @@ Result solve(double theta, double phi, double alpha) {
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
 #ifdef USE_GPU
-    p.N_psi        = 750000;   // pass-0: full 2π sweep
+    p.N_psi        = 1000000;   // pass-0: full 2π sweep
     p.N_psi_refine = 750000;   // per-well π/3 arc refinement (3 wells)
     p.max_passes   = 1;        // legacy path unused in cold-start multi-well mode
     p.max_steps    = 1;        // direct cold start at target
