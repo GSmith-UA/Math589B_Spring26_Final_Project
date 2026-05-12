@@ -5,7 +5,7 @@
 
 Result solve(double theta, double phi, double alpha) {
     // wrap theta to (-π, π] — dynamics and cost are 2π-periodic
-    theta = std::atan2(std::sin(theta), std::cos(theta));
+    // theta = std::atan2(std::sin(theta), std::cos(theta));
 
     ContinuationParams p;
     p.alpha      = alpha;
