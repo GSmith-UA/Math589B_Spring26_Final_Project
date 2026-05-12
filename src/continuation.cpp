@@ -36,6 +36,10 @@ static inline State applyJac(const State& z, const State& psi, double alpha) {
     };
 }
 
+static double forwardResidual(double theta, double phi,
+                               double lambda1, double lambda2,
+                               const ContinuationParams& params);
+
 // Newton refinement via variational equations.
 // Integrates (z, ψ1, ψ2) together; ψi = ∂z/∂λi satisfies ψ' = A(z)ψ.
 // Newton step: Δλ = -J⁻¹ r  where r=(θ(t*),φ(t*)), J[i][j]=∂zi(t*)/∂λj(0).
@@ -144,19 +148,32 @@ static CostateEstimate newtonRefine(double theta, double phi,
 static double forwardResidual(double theta, double phi,
                                double lambda1, double lambda2,
                                const ContinuationParams& params) {
-    State z = {theta, phi, lambda1, lambda2};
-    auto f  = [alpha = params.alpha](const State& zz) -> State {
-        return forwardDynamics(zz, alpha);
-    };
-    int    n_steps = static_cast<int>(std::round(params.T_max / params.h));
+    const double alpha   = params.alpha;
+    const double h       = params.h;
+    const int    n_steps = static_cast<int>(std::round(params.T_max / h));
+
+    double th = theta, ph = phi, l1 = lambda1, l2 = lambda2;
     double min_mag = 1e18;
+
     for (int s = 0; s < n_steps; ++s) {
-        z = rk4Step(z, params.h, f);
-        double mag = 0.0;
-        for (double v : z) mag += v * v;
-        mag = std::sqrt(mag);
+        State z   = {th, ph, l1, l2};
+        State k1  = forwardDynamics(z, alpha);
+        State zm  = addScaled(z, 0.5*h, k1);
+        State k2  = forwardDynamics(zm, alpha);
+        zm        = addScaled(z, 0.5*h, k2);
+        State k3  = forwardDynamics(zm, alpha);
+        zm        = addScaled(z, h, k3);
+        State k4  = forwardDynamics(zm, alpha);
+        double c6 = h / 6.0;
+        th += c6 * (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
+        ph += c6 * (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
+        l1 += c6 * (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
+        l2 += c6 * (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
+
+        double mag = std::sqrt(th*th + ph*ph + l1*l1 + l2*l2);
         if (std::isnan(mag) || std::isinf(mag)) break;
         if (mag < min_mag) min_mag = mag;
+        if (min_mag < params.epsilon_fwd) break;
     }
     return min_mag;
 }
