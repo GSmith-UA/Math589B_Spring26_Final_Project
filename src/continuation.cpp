@@ -53,6 +53,122 @@ static double forwardResidual(double theta, double phi,
     return min_mag;
 }
 
+// ---------------------------------------------------------------------------
+// Newton refinement via variational equations (2×2 shooting system)
+// ---------------------------------------------------------------------------
+
+static CostateEstimate newtonRefine(double theta, double phi,
+                                     double l1_init, double l2_init,
+                                     const ContinuationParams& params) {
+    const double alpha   = params.alpha;
+    const double h_n     = params.h;
+    const int    n_steps = static_cast<int>(std::round(params.T_max / h_n));
+
+    double l1 = l1_init, l2 = l2_init;
+    double best_resid = forwardResidual(theta, phi, l1, l2, params);
+    double best_l1 = l1, best_l2 = l2;
+
+    for (int iter = 0; iter < 5 && best_resid > params.epsilon_fwd; ++iter) {
+        double th = theta, ph = phi, lam1 = l1, lam2 = l2;
+        // Φ columns: pa = dz/dl1(0), pb = dz/dl2(0)
+        double pa[4] = {0, 0, 1, 0};
+        double pb[4] = {0, 0, 0, 1};
+
+        double min_mag = 1e18;
+        double r_th = 0, r_ph = 0;
+        double J00 = 0, J01 = 0, J10 = 0, J11 = 0;
+
+        bool bad = false;
+        for (int s = 0; s < n_steps; ++s) {
+            State z1 = {th, ph, lam1, lam2};
+            State f1 = forwardDynamics(z1, alpha);
+            Matrix4 A1 = computeJacobian(z1, alpha);
+            double k1a[4], k1b[4];
+            for (int i=0;i<4;i++){
+                k1a[i]=A1[i][0]*pa[0]+A1[i][1]*pa[1]+A1[i][2]*pa[2]+A1[i][3]*pa[3];
+                k1b[i]=A1[i][0]*pb[0]+A1[i][1]*pb[1]+A1[i][2]*pb[2]+A1[i][3]*pb[3];
+            }
+            double h2=0.5*h_n;
+            State z2={th+h2*f1[0],ph+h2*f1[1],lam1+h2*f1[2],lam2+h2*f1[3]};
+            double pa2[4],pb2[4];
+            for(int i=0;i<4;i++){pa2[i]=pa[i]+h2*k1a[i];pb2[i]=pb[i]+h2*k1b[i];}
+            State f2=forwardDynamics(z2,alpha);
+            Matrix4 A2=computeJacobian(z2,alpha);
+            double k2a[4],k2b[4];
+            for(int i=0;i<4;i++){
+                k2a[i]=A2[i][0]*pa2[0]+A2[i][1]*pa2[1]+A2[i][2]*pa2[2]+A2[i][3]*pa2[3];
+                k2b[i]=A2[i][0]*pb2[0]+A2[i][1]*pb2[1]+A2[i][2]*pb2[2]+A2[i][3]*pb2[3];
+            }
+            State z3={th+h2*f2[0],ph+h2*f2[1],lam1+h2*f2[2],lam2+h2*f2[3]};
+            double pa3[4],pb3[4];
+            for(int i=0;i<4;i++){pa3[i]=pa[i]+h2*k2a[i];pb3[i]=pb[i]+h2*k2b[i];}
+            State f3=forwardDynamics(z3,alpha);
+            Matrix4 A3=computeJacobian(z3,alpha);
+            double k3a[4],k3b[4];
+            for(int i=0;i<4;i++){
+                k3a[i]=A3[i][0]*pa3[0]+A3[i][1]*pa3[1]+A3[i][2]*pa3[2]+A3[i][3]*pa3[3];
+                k3b[i]=A3[i][0]*pb3[0]+A3[i][1]*pb3[1]+A3[i][2]*pb3[2]+A3[i][3]*pb3[3];
+            }
+            State z4={th+h_n*f3[0],ph+h_n*f3[1],lam1+h_n*f3[2],lam2+h_n*f3[3]};
+            double pa4[4],pb4[4];
+            for(int i=0;i<4;i++){pa4[i]=pa[i]+h_n*k3a[i];pb4[i]=pb[i]+h_n*k3b[i];}
+            State f4=forwardDynamics(z4,alpha);
+            Matrix4 A4=computeJacobian(z4,alpha);
+            double k4a[4],k4b[4];
+            for(int i=0;i<4;i++){
+                k4a[i]=A4[i][0]*pa4[0]+A4[i][1]*pa4[1]+A4[i][2]*pa4[2]+A4[i][3]*pa4[3];
+                k4b[i]=A4[i][0]*pb4[0]+A4[i][1]*pb4[1]+A4[i][2]*pb4[2]+A4[i][3]*pb4[3];
+            }
+            double c6=h_n/6.0;
+            th   +=c6*(f1[0]+2*f2[0]+2*f3[0]+f4[0]);
+            ph   +=c6*(f1[1]+2*f2[1]+2*f3[1]+f4[1]);
+            lam1 +=c6*(f1[2]+2*f2[2]+2*f3[2]+f4[2]);
+            lam2 +=c6*(f1[3]+2*f2[3]+2*f3[3]+f4[3]);
+            for(int i=0;i<4;i++){
+                pa[i]+=c6*(k1a[i]+2*k2a[i]+2*k3a[i]+k4a[i]);
+                pb[i]+=c6*(k1b[i]+2*k2b[i]+2*k3b[i]+k4b[i]);
+            }
+            double mag=std::sqrt(th*th+ph*ph+lam1*lam1+lam2*lam2);
+            if (!std::isfinite(mag)) { bad=true; break; }
+            if (mag < min_mag) {
+                min_mag=mag;
+                r_th=th; r_ph=ph;
+                J00=pa[0]; J01=pb[0];
+                J10=pa[1]; J11=pb[1];
+            }
+            if (min_mag < params.epsilon_fwd) break;
+            if (min_mag < 1.0 && mag > 2.0*min_mag) break;  // past min, diverging
+        }
+        if (bad) break;
+        if (!std::isfinite(J00)||!std::isfinite(J01)||
+            !std::isfinite(J10)||!std::isfinite(J11)) break;
+
+        // 2×2 Newton: J·Δλ = -r  where r = (θ(T*), φ(T*))
+        double det = J00*J11 - J01*J10;
+        if (std::abs(det) < 1e-20) break;
+        double dl1 = (-r_th*J11 + r_ph*J01) / det;
+        double dl2 = ( r_th*J10 - r_ph*J00) / det;
+
+        double dnorm = std::sqrt(dl1*dl1 + dl2*dl2);
+        if (dnorm < 1e-12) break;
+        if (dnorm > 5.0) { dl1 *= 5.0/dnorm; dl2 *= 5.0/dnorm; }
+
+        double step = 1.0;
+        bool improved = false;
+        for (int bt=0; bt<8; ++bt, step*=0.5) {
+            double nl1=l1+step*dl1, nl2=l2+step*dl2;
+            if (std::abs(nl1)>50||std::abs(nl2)>50) continue;
+            double nr=forwardResidual(theta,phi,nl1,nl2,params);
+            if (nr < best_resid) {
+                best_resid=nr; best_l1=nl1; best_l2=nl2;
+                l1=nl1; l2=nl2; improved=true; break;
+            }
+        }
+        if (!improved) break;
+    }
+    return {best_l1, best_l2, best_resid, best_resid < params.epsilon_fwd, 0.0};
+}
+
 // Greedy h* point selection using quadratic features.
 // drop_phi=false: features = [θ², θ, θφ, φ², φ, 1]  (6D)
 // drop_phi=true:  features = [θ², θ, 1]               (3D)
@@ -133,6 +249,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
     double h_s = (params.h_shoot > 0.0) ? params.h_shoot : params.h;
 
     std::vector<FlagResult> all_flags;
+    std::vector<double>     all_psi;
 
     for (int pass = 0; pass < params.max_passes; ++pass) {
         int n_seeds = params.N_psi;
@@ -164,6 +281,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
             }
 
             all_flags.push_back(flags[i]);
+            all_psi.push_back(psi_i);
 
             if (flags[i].min_dist < pass_best_dist) {
                 pass_best_dist = flags[i].min_dist;
@@ -259,6 +377,52 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
     //std::fprintf(stderr, "[DBG] final lambda=(%.6f,%.6f) fwd_resid=%.3e\n",
     //             best.lambda1, best.lambda2, best.forward_residual);
+
+    // --- Newton refinement from best estimate + diverse ψ-wells ---
+    {
+        CostateEstimate nr = newtonRefine(theta, phi,
+                                          best.lambda1, best.lambda2, params);
+        if (nr.forward_residual < best.forward_residual)
+            best = {nr.lambda1, nr.lambda2, nr.forward_residual, nr.accepted, best.best_psi};
+
+        if (!best.accepted && !all_flags.empty()) {
+            const int    K_wells  = 2;
+            const double psi_gap  = 0.3;
+            std::vector<bool> excluded(all_flags.size(), false);
+
+            // Exclude ψ-neighborhood of current best so wells are diverse
+            for (int i = 0; i < (int)all_flags.size(); ++i) {
+                double dp = std::abs(all_psi[i] - best.best_psi);
+                if (dp > M_PI) dp = 2*M_PI - dp;
+                if (dp < psi_gap) excluded[i] = true;
+            }
+
+            for (int k = 0; k < K_wells && !best.accepted; ++k) {
+                int    widx  = -1;
+                double wdist = 1e18;
+                for (int i = 0; i < (int)all_flags.size(); ++i) {
+                    if (!excluded[i] && all_flags[i].min_dist < wdist) {
+                        wdist = all_flags[i].min_dist; widx = i;
+                    }
+                }
+                if (widx < 0) break;
+
+                double psi_w = all_psi[widx];
+                for (int i = 0; i < (int)all_flags.size(); ++i) {
+                    double dp = std::abs(all_psi[i] - psi_w);
+                    if (dp > M_PI) dp = 2*M_PI - dp;
+                    if (dp < psi_gap) excluded[i] = true;
+                }
+
+                const State& st = all_flags[widx].state_at_flag;
+                CostateEstimate wr = newtonRefine(theta, phi, st[2], st[3], params);
+                if (wr.forward_residual < best.forward_residual)
+                    best = {wr.lambda1, wr.lambda2, wr.forward_residual,
+                            wr.accepted, psi_w};
+            }
+        }
+    }
+
     return best;
 }
 
