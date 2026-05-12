@@ -19,131 +19,6 @@ static inline State addScaled(const State& a, double s, const State& b) {
     return { a[0]+s*b[0], a[1]+s*b[1], a[2]+s*b[2], a[3]+s*b[3] };
 }
 
-// Apply the Jacobian of forward dynamics to a sensitivity vector psi.
-// Derivation: ∂f/∂z evaluated along z, applied to psi.
-static inline State applyJac(const State& z, const State& psi, double alpha) {
-    double th = z[0], l2 = z[3];
-    double c = cos(th), s = sin(th);
-    double A10 =  c * (1.0 + 2.0*l2*s);
-    double A13 = -c*c;
-    double A20 = -(c - l2*s + l2*l2*(c*c - s*s));
-    double A23 = -(c + 2.0*l2*s*c);
-    return {
-         psi[1],
-         A10*psi[0] - alpha*psi[1] + A13*psi[3],
-         A20*psi[0]                + A23*psi[3],
-        -psi[1] - psi[2] + alpha*psi[3]
-    };
-}
-
-static double forwardResidual(double theta, double phi,
-                               double lambda1, double lambda2,
-                               const ContinuationParams& params);
-
-// Newton refinement via variational equations.
-// Integrates (z, ψ1, ψ2) together; ψi = ∂z/∂λi satisfies ψ' = A(z)ψ.
-// Newton step: Δλ = -J⁻¹ r  where r=(θ(t*),φ(t*)), J[i][j]=∂zi(t*)/∂λj(0).
-static CostateEstimate newtonRefine(double theta, double phi,
-                                     double lambda1, double lambda2,
-                                     const ContinuationParams& params) {
-    const int    max_iter = 6;
-    const int    n_steps  = static_cast<int>(std::round(params.T_max / params.h));
-    const double h        = params.h;
-    const double alpha    = params.alpha;
-    auto fwd = [alpha](const State& z) { return forwardDynamics(z, alpha); };
-
-    double l1 = lambda1, l2 = lambda2;
-    double best_resid = 1e18;
-    double bl1 = l1, bl2 = l2;
-    bool   accepted = false;
-
-    for (int iter = 0; iter < max_iter; ++iter) {
-        State z    = { theta, phi, l1, l2 };
-        State psi1 = { 0.0, 0.0, 1.0, 0.0 };
-        State psi2 = { 0.0, 0.0, 0.0, 1.0 };
-
-        double min_mag = 1e18;
-        State  bz = z, bp1 = psi1, bp2 = psi2;
-
-        for (int s = 0; s < n_steps; ++s) {
-            // RK4 for (z, ψ1, ψ2) simultaneously
-            State k1z  = fwd(z);
-            State k1p1 = applyJac(z, psi1, alpha);
-            State k1p2 = applyJac(z, psi2, alpha);
-
-            State zm  = addScaled(z,    0.5*h, k1z);
-            State p1m = addScaled(psi1, 0.5*h, k1p1);
-            State p2m = addScaled(psi2, 0.5*h, k1p2);
-            State k2z  = fwd(zm);
-            State k2p1 = applyJac(zm, p1m, alpha);
-            State k2p2 = applyJac(zm, p2m, alpha);
-
-            zm  = addScaled(z,    0.5*h, k2z);
-            p1m = addScaled(psi1, 0.5*h, k2p1);
-            p2m = addScaled(psi2, 0.5*h, k2p2);
-            State k3z  = fwd(zm);
-            State k3p1 = applyJac(zm, p1m, alpha);
-            State k3p2 = applyJac(zm, p2m, alpha);
-
-            zm  = addScaled(z,    h, k3z);
-            p1m = addScaled(psi1, h, k3p1);
-            p2m = addScaled(psi2, h, k3p2);
-            State k4z  = fwd(zm);
-            State k4p1 = applyJac(zm, p1m, alpha);
-            State k4p2 = applyJac(zm, p2m, alpha);
-
-            double c6 = h / 6.0;
-            for (int i = 0; i < 4; ++i) {
-                z[i]    += c6 * (k1z[i]  + 2*k2z[i]  + 2*k3z[i]  + k4z[i]);
-                psi1[i] += c6 * (k1p1[i] + 2*k2p1[i] + 2*k3p1[i] + k4p1[i]);
-                psi2[i] += c6 * (k1p2[i] + 2*k2p2[i] + 2*k3p2[i] + k4p2[i]);
-            }
-
-            double mag = 0.0;
-            for (double v : z) mag += v*v;
-            mag = std::sqrt(mag);
-            if (std::isnan(mag) || std::isinf(mag)) break;
-
-            if (mag < min_mag) { min_mag = mag; bz = z; bp1 = psi1; bp2 = psi2; }
-            if (mag > 2.0*min_mag) break;
-        }
-
-        if (min_mag < best_resid) { best_resid = min_mag; bl1 = l1; bl2 = l2; }
-        if (min_mag < params.epsilon_fwd) { accepted = true; break; }
-        if (min_mag > 1e17) break;
-
-        // 2×2 Newton step: residual r=(θ(t*), φ(t*)), Jacobian J[i][j]=ψj_i(t*)
-        double r0  = bz[0],  r1  = bz[1];
-        double J00 = bp1[0], J01 = bp2[0];
-        double J10 = bp1[1], J11 = bp2[1];
-        double det = J00*J11 - J01*J10;
-        if (std::abs(det) < 1e-14) break;
-
-        double dl1 = -(J11*r0 - J01*r1) / det;
-        double dl2 = -(-J10*r0 + J00*r1) / det;
-
-        // Backtracking line search: halve step until residual improves
-        double step     = 1.0;
-        bool   improved = false;
-        for (int bt = 0; bt < 5; ++bt) {
-            double tl1 = l1 + step * dl1;
-            double tl2 = l2 + step * dl2;
-            double tr  = forwardResidual(theta, phi, tl1, tl2, params);
-            if (tr < min_mag) {
-                l1 = tl1; l2 = tl2;
-                improved = true;
-                break;
-            }
-            step *= 0.5;
-        }
-        if (!improved) break;
-
-        //std::fprintf(stderr, "[NEWTON] iter=%d  resid=%.3e  dl=(%.2e,%.2e)  l=(%.6f,%.6f)\n",
-        //             iter, min_mag, dl1, dl2, l1, l2);
-    }
-
-    return { bl1, bl2, best_resid, accepted, 0.0 };
-}
 
 static double forwardResidual(double theta, double phi,
                                double lambda1, double lambda2,
@@ -282,7 +157,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
             double l1 = flags[i].state_at_flag[2];
             double l2 = flags[i].state_at_flag[3];
-            if (std::abs(l1) > 100.0 || std::abs(l2) > 100.0) {
+            if (std::abs(l1) > 25.0 || std::abs(l2) > 25.0) {
                 ++pass_n_bad;
                 //std::fprintf(stderr, "[BADFLAG] pass=%d λ=(%.3e,%.3e)\n", pass, l1, l2);
                 continue;
@@ -380,16 +255,6 @@ CostateEstimate solveAtPoint(double theta, double phi,
         }
 
         if (best.accepted) break;
-    }
-
-    if (!best.accepted) {
-        CostateEstimate nr = newtonRefine(theta, phi,
-                                          best.lambda1, best.lambda2, params);
-        //std::fprintf(stderr, "[NEWTON] final resid=%.3e  accepted=%d\n",
-        //             nr.forward_residual, (int)nr.accepted);
-        if (nr.forward_residual < best.forward_residual)
-            best = { nr.lambda1, nr.lambda2, nr.forward_residual,
-                     nr.accepted, best.best_psi };
     }
 
     //std::fprintf(stderr, "[DBG] final lambda=(%.6f,%.6f) fwd_resid=%.3e\n",
