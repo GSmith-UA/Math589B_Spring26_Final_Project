@@ -34,6 +34,7 @@ static double computeCost(double theta, double phi,
         State zm = {th+0.5*h*k1[0], ph+0.5*h*k1[1], l1+0.5*h*k1[2], l2+0.5*h*k1[3]};
         State k2 = forwardDynamics(zm, alpha);
         zm = {th+0.5*h*k2[0], ph+0.5*h*k2[1], l1+0.5*h*k2[2], l2+0.5*h*k2[3]};
+        double L_mid = evalL(zm[0], zm[1], zm[3]);
         State k3 = forwardDynamics(zm, alpha);
         zm = {th+h*k3[0], ph+h*k3[1], l1+h*k3[2], l2+h*k3[3]};
         State k4 = forwardDynamics(zm, alpha);
@@ -44,7 +45,7 @@ static double computeCost(double theta, double phi,
         l2 += c6*(k1[3]+2*k2[3]+2*k3[3]+k4[3]);
 
         double L = evalL(th, ph, l2);
-        running_cost += 0.5*(L_prev + L)*h;
+        running_cost += (h/6.0)*(L_prev + 4.0*L_mid + L);  // Simpson's rule: O(h^4) vs trapezoidal O(h^2)
         L_prev = L;
 
         double mag = std::sqrt(th*th + ph*ph + l1*l1 + l2*l2);
