@@ -106,6 +106,7 @@ static CostateEstimate newtonRefine(double theta, double phi,
 
         if (min_mag < best_resid) { best_resid = min_mag; bl1 = l1; bl2 = l2; }
         if (min_mag < params.epsilon_fwd) { accepted = true; break; }
+        if (min_mag > 1e17) break;
 
         // 2×2 Newton step: residual r=(θ(t*), φ(t*)), Jacobian J[i][j]=ψj_i(t*)
         double r0  = bz[0],  r1  = bz[1];
@@ -116,11 +117,25 @@ static CostateEstimate newtonRefine(double theta, double phi,
 
         double dl1 = -(J11*r0 - J01*r1) / det;
         double dl2 = -(-J10*r0 + J00*r1) / det;
-        l1 += dl1;
-        l2 += dl2;
 
-        std::fprintf(stderr, "[NEWTON] iter=%d  resid=%.3e  dl=(%.2e,%.2e)  l=(%.6f,%.6f)\n",
-                     iter, min_mag, dl1, dl2, l1, l2);
+        // Backtracking line search: halve step until residual improves
+        double step     = 1.0;
+        bool   improved = false;
+        for (int bt = 0; bt < 5; ++bt) {
+            double tl1 = l1 + step * dl1;
+            double tl2 = l2 + step * dl2;
+            double tr  = forwardResidual(theta, phi, tl1, tl2, params);
+            if (tr < min_mag) {
+                l1 = tl1; l2 = tl2;
+                improved = true;
+                break;
+            }
+            step *= 0.5;
+        }
+        if (!improved) break;
+
+        //std::fprintf(stderr, "[NEWTON] iter=%d  resid=%.3e  dl=(%.2e,%.2e)  l=(%.6f,%.6f)\n",
+        //             iter, min_mag, dl1, dl2, l1, l2);
     }
 
     return { bl1, bl2, best_resid, accepted, 0.0 };
@@ -213,8 +228,8 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
     CostateEstimate best = {warm_start[0], warm_start[1], 1e18, false, 0.0};
 
-    std::fprintf(stderr, "[DBG] solveAtPoint(%.4f,%.4f) %s  drop_phi=%d\n",
-                 theta, phi, cold_start ? "COLD" : "WARM", (int)drop_phi);
+    //std::fprintf(stderr, "[DBG] solveAtPoint(%.4f,%.4f) %s  drop_phi=%d\n",
+    //             theta, phi, cold_start ? "COLD" : "WARM", (int)drop_phi);
 
     State   origin = {0.0, 0.0, 0.0, 0.0};
     Matrix4 J      = computeJacobian(origin, alpha);
@@ -252,7 +267,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
             double l2 = flags[i].state_at_flag[3];
             if (std::abs(l1) > 100.0 || std::abs(l2) > 100.0) {
                 ++pass_n_bad;
-                std::fprintf(stderr, "[BADFLAG] pass=%d λ=(%.3e,%.3e)\n", pass, l1, l2);
+                //std::fprintf(stderr, "[BADFLAG] pass=%d λ=(%.3e,%.3e)\n", pass, l1, l2);
                 continue;
             }
 
@@ -280,11 +295,11 @@ CostateEstimate solveAtPoint(double theta, double phi,
             arc = std::min(arc * 2.0, 2.0 * M_PI);
         }
 
-        std::fprintf(stderr,
-            "[DBG]   pass=%d  n_seeds=%d  arc=%.4f  n_flagged=%d  n_bad=%d"
-            "  best_dist=%.3e  fwd_resid=%.3e  psi_c=%.3f\n",
-            pass, n_seeds, arc, pass_n_flagged, pass_n_bad, pass_best_dist,
-            best.forward_residual, psi_center);
+        //std::fprintf(stderr,
+        //    "[DBG]   pass=%d  n_seeds=%d  arc=%.4f  n_flagged=%d  n_bad=%d"
+        //    "  best_dist=%.3e  fwd_resid=%.3e  psi_c=%.3f\n",
+        //    pass, n_seeds, arc, pass_n_flagged, pass_n_bad, pass_best_dist,
+        //    best.forward_residual, psi_center);
 
         if (best.accepted) break;
 
@@ -301,8 +316,8 @@ CostateEstimate solveAtPoint(double theta, double phi,
         auto ls_pts  = hstarGreedy(ls_candidates, theta, phi, 12, drop_phi);
         int  min_pts = drop_phi ? 3 : 4;
 
-        std::fprintf(stderr, "[DBG]   h* selected %d/%d candidates\n",
-                     (int)ls_pts.size(), (int)ls_candidates.size());
+        //std::fprintf(stderr, "[DBG]   h* selected %d/%d candidates\n",
+        //             (int)ls_pts.size(), (int)ls_candidates.size());
 
         if ((int)ls_pts.size() >= min_pts) {
             int n    = (int)ls_pts.size();
@@ -320,10 +335,10 @@ CostateEstimate solveAtPoint(double theta, double phi,
                 Y(i, 1) = ls_pts[i].state_at_flag[3];
             }
 
-            Eigen::JacobiSVD<Eigen::MatrixXd> svd(X);
-            Eigen::VectorXd sv = svd.singularValues();
-            double cond = (sv(sv.size()-1) > 0.0) ? sv(0)/sv(sv.size()-1) : 1e18;
-            std::fprintf(stderr, "[LS_COND] cond=%.3e\n", cond);
+            //Eigen::JacobiSVD<Eigen::MatrixXd> svd(X);
+            //Eigen::VectorXd sv = svd.singularValues();
+            //double cond = (sv(sv.size()-1) > 0.0) ? sv(0)/sv(sv.size()-1) : 1e18;
+            //std::fprintf(stderr, "[LS_COND] cond=%.3e\n", cond);
 
             auto qr = X.colPivHouseholderQr();
             if (qr.rank() >= ncol) {
@@ -335,36 +350,33 @@ CostateEstimate solveAtPoint(double theta, double phi,
                 double l1 = lam(0), l2 = lam(1);
 
                 if (std::abs(l1) < 1e6 && std::abs(l2) < 1e6) {
-                    double resid  = forwardResidual(theta, phi, l1, l2, params);
-                    bool   better = resid < best.forward_residual;
-                    std::fprintf(stderr,
-                        "[LIN] n=%d  lambda=(%.6f,%.6f)  fwd_resid=%.3e%s\n",
-                        n, l1, l2, resid, better ? "  [BETTER]" : "");
-                    if (better)
+                    double resid = forwardResidual(theta, phi, l1, l2, params);
+                    if (resid < best.forward_residual)
                         best = {l1, l2, resid, resid < params.epsilon_fwd, best.best_psi};
-                } else {
-                    std::fprintf(stderr, "[LIN] lambda exploded\n");
+                    //std::fprintf(stderr,
+                    //    "[LIN] n=%d  lambda=(%.6f,%.6f)  fwd_resid=%.3e\n",
+                    //    n, l1, l2, resid);
                 }
-            } else {
-                std::fprintf(stderr, "[LIN] rank deficient\n");
+                //else std::fprintf(stderr, "[LIN] lambda exploded\n");
             }
+            //else std::fprintf(stderr, "[LIN] rank deficient\n");
         }
 
         if (best.accepted) break;
     }
 
-    if (!best.accepted && best.forward_residual < 1.0) {
+    if (!best.accepted) {
         CostateEstimate nr = newtonRefine(theta, phi,
                                           best.lambda1, best.lambda2, params);
-        std::fprintf(stderr, "[NEWTON] final resid=%.3e  accepted=%d\n",
-                     nr.forward_residual, (int)nr.accepted);
+        //std::fprintf(stderr, "[NEWTON] final resid=%.3e  accepted=%d\n",
+        //             nr.forward_residual, (int)nr.accepted);
         if (nr.forward_residual < best.forward_residual)
             best = { nr.lambda1, nr.lambda2, nr.forward_residual,
                      nr.accepted, best.best_psi };
     }
 
-    std::fprintf(stderr, "[DBG] final lambda=(%.6f,%.6f) fwd_resid=%.3e\n",
-                 best.lambda1, best.lambda2, best.forward_residual);
+    //std::fprintf(stderr, "[DBG] final lambda=(%.6f,%.6f) fwd_resid=%.3e\n",
+    //             best.lambda1, best.lambda2, best.forward_residual);
     return best;
 }
 
@@ -381,8 +393,8 @@ std::optional<CostateEstimate> continuationWalk(double theta_q, double phi_q,
     CostateEstimate current = {0.0, 0.0, 1e18, false, 0.0};
     double psi_center = 0.0;
 
-    std::fprintf(stderr, "\n=== continuationWalk(%.4f,%.4f) N=%d ===\n",
-                 theta_q, phi_q, N);
+    //std::fprintf(stderr, "\n=== continuationWalk(%.4f,%.4f) N=%d ===\n",
+    //             theta_q, phi_q, N);
 
     for (int n = 1; n <= N; ++n) {
         double frac    = static_cast<double>(n) / N;
@@ -394,8 +406,8 @@ std::optional<CostateEstimate> continuationWalk(double theta_q, double phi_q,
 
         bool cold_start = (n == 1);
 
-        std::fprintf(stderr, "\n--- step %d/%d  theta=%.4f phi=%.4f ---\n",
-                     n, N, theta_n, phi_n);
+        //std::fprintf(stderr, "\n--- step %d/%d  theta=%.4f phi=%.4f ---\n",
+        //             n, N, theta_n, phi_n);
 
         CostateEstimate est = solveAtPoint(theta_n, phi_n, warm_start,
                                            step_params, cold_start, psi_center);
@@ -403,11 +415,11 @@ std::optional<CostateEstimate> continuationWalk(double theta_q, double phi_q,
         if (est.accepted) {
             warm_start = {est.lambda1, est.lambda2};
             current    = est;
-            std::fprintf(stderr, "[DBG] step %d ACCEPTED  resid=%.3e\n",
-                         n, est.forward_residual);
+            //std::fprintf(stderr, "[DBG] step %d ACCEPTED  resid=%.3e\n",
+            //             n, est.forward_residual);
         } else {
-            std::fprintf(stderr, "[DBG] step %d REJECTED  resid=%.3e\n",
-                         n, est.forward_residual);
+            //std::fprintf(stderr, "[DBG] step %d REJECTED  resid=%.3e\n",
+            //             n, est.forward_residual);
             if (est.forward_residual < current.forward_residual)
                 current = est;
             break;
