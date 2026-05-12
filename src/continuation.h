@@ -22,6 +22,7 @@ struct ContinuationParams {
     int    max_steps    = INT_MAX; // hard cap on continuation steps (0 = no cap)
     double epsilon_shrink = 0.5;   // tolerance shrink factor per refinement
     double alpha        = 0.1;     // damping
+    int    N_psi_refine = 0;       // seeds per well refinement pass (0 = disabled)
 };
 
 struct CostateEstimate {

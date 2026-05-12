@@ -68,7 +68,7 @@ static CostateEstimate newtonRefine(double theta, double phi,
     double best_resid = forwardResidual(theta, phi, l1, l2, params);
     double best_l1 = l1, best_l2 = l2;
 
-    for (int iter = 0; iter < 5 && best_resid > 1e-7; ++iter) {
+    for (int iter = 0; iter < 5 && best_resid > params.epsilon_fwd; ++iter) {
         double th = theta, ph = phi, lam1 = l1, lam2 = l2;
         // Φ columns: pa = dz/dl1(0), pb = dz/dl2(0)
         double pa[4] = {0, 0, 1, 0};
@@ -225,6 +225,53 @@ static std::vector<FlagResult> hstarGreedy(
     return selected;
 }
 
+struct LSResult { double l1, l2; bool ok; };
+
+static LSResult runLS(const std::vector<FlagResult>& flags,
+                      double theta, double phi,
+                      bool drop_phi) {
+    std::vector<FlagResult> candidates;
+    if (drop_phi) {
+        for (const auto& fr : flags)
+            if (std::abs(fr.state_at_flag[1] - phi) < 0.02)
+                candidates.push_back(fr);
+    } else {
+        candidates = flags;
+    }
+
+    auto ls_pts  = hstarGreedy(candidates, theta, phi, 12, drop_phi);
+    int  min_pts = drop_phi ? 3 : 6;
+    if ((int)ls_pts.size() < min_pts) return {0.0, 0.0, false};
+
+    int n    = (int)ls_pts.size();
+    int ncol = drop_phi ? 3 : 6;
+
+    Eigen::MatrixXd X(n, ncol), Y(n, 2);
+    for (int i = 0; i < n; ++i) {
+        double tf = ls_pts[i].state_at_flag[0];
+        double pf = ls_pts[i].state_at_flag[1];
+        X(i, 0) = tf * tf;
+        X(i, 1) = tf;
+        if (!drop_phi) { X(i, 2) = tf * pf; X(i, 3) = pf * pf; X(i, 4) = pf; X(i, 5) = 1.0; }
+        else           { X(i, 2) = 1.0; }
+        Y(i, 0) = ls_pts[i].state_at_flag[2];
+        Y(i, 1) = ls_pts[i].state_at_flag[3];
+    }
+
+    auto qr = X.colPivHouseholderQr();
+    if (qr.rank() < ncol) return {0.0, 0.0, false};
+
+    Eigen::MatrixXd A = qr.solve(Y);
+    Eigen::VectorXd xt(ncol);
+    if (drop_phi) xt << theta * theta, theta, 1.0;
+    else          xt << theta * theta, theta, theta * phi, phi * phi, phi, 1.0;
+    Eigen::Vector2d lam = A.transpose() * xt;
+    double l1 = lam(0), l2 = lam(1);
+
+    if (std::abs(l1) >= 1e6 || std::abs(l2) >= 1e6) return {0.0, 0.0, false};
+    return {l1, l2, true};
+}
+
 CostateEstimate solveAtPoint(double theta, double phi,
                               std::array<double, 2> warm_start,
                               const ContinuationParams& params,
@@ -236,17 +283,148 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
     CostateEstimate best = {warm_start[0], warm_start[1], 1e18, false, 0.0};
 
-    //std::fprintf(stderr, "[DBG] solveAtPoint(%.4f,%.4f) %s  drop_phi=%d\n",
-    //             theta, phi, cold_start ? "COLD" : "WARM", (int)drop_phi);
-
     State   origin = {0.0, 0.0, 0.0, 0.0};
     Matrix4 J      = computeJacobian(origin, alpha);
     EigenpairResult eigs = computeStableEigenpairs(J);
 
+    double h_s = (params.h_shoot > 0.0) ? params.h_shoot : params.h;
+
+    // -----------------------------------------------------------------------
+    // Cold-start multi-well path (GPU: N_psi_refine > 0)
+    // -----------------------------------------------------------------------
+    if (cold_start && params.N_psi_refine > 0) {
+        psi_center = 0.0;
+
+        // Pass 0: full 2π sweep
+        int n_seeds0 = params.N_psi;
+        auto seeds0  = generateSeedPointsArc(eigs, n_seeds0, params.r, 0.0, 2*M_PI, origin);
+        auto raw0    = shootAndFlag(seeds0, theta, phi, alpha, params.T_max, h_s, flag_tol);
+
+        std::vector<FlagResult> pass0_flags;
+        std::vector<double>     pass0_psi;
+        double     p0_best_dist = 1e18;
+        double     p0_best_psi  = 0.0;
+        FlagResult p0_best_fr;
+        bool       p0_has_best  = false;
+
+        for (int i = 0; i < (int)raw0.size(); ++i) {
+            if (!raw0[i].flagged) continue;
+            double l1 = raw0[i].state_at_flag[2];
+            double l2 = raw0[i].state_at_flag[3];
+            if (std::abs(l1) > 25.0 || std::abs(l2) > 25.0) continue;
+            double psi_i = 2*M_PI * (i - n_seeds0 / 2.0) / n_seeds0;
+            pass0_flags.push_back(raw0[i]);
+            pass0_psi.push_back(psi_i);
+            if (raw0[i].min_dist < p0_best_dist) {
+                p0_best_dist = raw0[i].min_dist;
+                p0_best_psi  = psi_i;
+                p0_best_fr   = raw0[i];
+                p0_has_best  = true;
+            }
+        }
+
+        if (p0_has_best) {
+            const State& st = p0_best_fr.state_at_flag;
+            double resid = forwardResidual(theta, phi, st[2], st[3], params);
+            if (resid < best.forward_residual)
+                best = {st[2], st[3], resid, resid < params.epsilon_fwd, p0_best_psi};
+            psi_center = p0_best_psi;
+        }
+
+        // LS from pass0 flags alone
+        LSResult ls0 = runLS(pass0_flags, theta, phi, drop_phi);
+        if (ls0.ok) {
+            double resid = forwardResidual(theta, phi, ls0.l1, ls0.l2, params);
+            if (resid < best.forward_residual)
+                best = {ls0.l1, ls0.l2, resid, resid < params.epsilon_fwd, best.best_psi};
+        }
+
+        if (best.accepted) return best;
+
+        // Find K=3 diverse wells from pass0_flags (psi_gap = π/3)
+        const int    K_wells = 3;
+        const double psi_gap = M_PI / 3.0;
+        double well_psi_arr[3];
+        int    n_wells = 0;
+        std::vector<bool> well_excl(pass0_flags.size(), false);
+
+        for (int k = 0; k < K_wells; ++k) {
+            int    widx  = -1;
+            double wdist = 1e18;
+            for (int i = 0; i < (int)pass0_flags.size(); ++i) {
+                if (!well_excl[i] && pass0_flags[i].min_dist < wdist) {
+                    wdist = pass0_flags[i].min_dist; widx = i;
+                }
+            }
+            if (widx < 0) break;
+            well_psi_arr[n_wells++] = pass0_psi[widx];
+            for (int i = 0; i < (int)pass0_flags.size(); ++i) {
+                double dp = std::abs(pass0_psi[i] - pass0_psi[widx]);
+                if (dp > M_PI) dp = 2*M_PI - dp;
+                if (dp < psi_gap) well_excl[i] = true;
+            }
+        }
+
+        // Per-well: π/3 arc refinement → combined LS → Newton
+        int n_refine = params.N_psi_refine;
+        for (int k = 0; k < n_wells && !best.accepted; ++k) {
+            double wc = well_psi_arr[k];
+
+            auto wseeds = generateSeedPointsArc(eigs, n_refine, params.r, wc, M_PI/3.0, origin);
+            auto wraw   = shootAndFlag(wseeds, theta, phi, alpha, params.T_max, h_s, flag_tol);
+
+            std::vector<FlagResult> refine_flags;
+            double     w_best_dist = 1e18;
+            FlagResult w_best_fr;
+            bool       w_has_best  = false;
+
+            for (int i = 0; i < (int)wraw.size(); ++i) {
+                if (!wraw[i].flagged) continue;
+                double l1 = wraw[i].state_at_flag[2];
+                double l2 = wraw[i].state_at_flag[3];
+                if (std::abs(l1) > 25.0 || std::abs(l2) > 25.0) continue;
+                refine_flags.push_back(wraw[i]);
+                if (wraw[i].min_dist < w_best_dist) {
+                    w_best_dist = wraw[i].min_dist;
+                    w_best_fr   = wraw[i];
+                    w_has_best  = true;
+                }
+            }
+
+            if (w_has_best) {
+                const State& st = w_best_fr.state_at_flag;
+                double resid = forwardResidual(theta, phi, st[2], st[3], params);
+                if (resid < best.forward_residual)
+                    best = {st[2], st[3], resid, resid < params.epsilon_fwd, wc};
+            }
+            if (best.accepted) break;
+
+            // Combined LS: pass0 + well refinement
+            std::vector<FlagResult> combined = pass0_flags;
+            combined.insert(combined.end(), refine_flags.begin(), refine_flags.end());
+
+            LSResult ls = runLS(combined, theta, phi, drop_phi);
+            if (ls.ok) {
+                double resid = forwardResidual(theta, phi, ls.l1, ls.l2, params);
+                if (resid < best.forward_residual)
+                    best = {ls.l1, ls.l2, resid, resid < params.epsilon_fwd, wc};
+            }
+            if (best.accepted) break;
+
+            // Newton from best estimate (may be LS result or raw flag)
+            CostateEstimate nr = newtonRefine(theta, phi, best.lambda1, best.lambda2, params);
+            if (nr.forward_residual < best.forward_residual)
+                best = {nr.lambda1, nr.lambda2, nr.forward_residual, nr.accepted, best.best_psi};
+        }
+
+        return best;
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy pass-loop path (CPU, or warm-start continuation steps)
+    // -----------------------------------------------------------------------
     double arc = cold_start ? 2.0 * M_PI : M_PI / 2.0;
     if (cold_start) psi_center = 0.0;
-
-    double h_s = (params.h_shoot > 0.0) ? params.h_shoot : params.h;
 
     std::vector<FlagResult> all_flags;
     std::vector<double>     all_psi;
@@ -313,63 +491,12 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
         if (best.accepted) break;
 
-        // Build candidate pool: φ-filtered when drop_phi to avoid manifold contamination.
-        std::vector<FlagResult> ls_candidates;
-        if (drop_phi) {
-            for (const auto& fr : all_flags)
-                if (std::abs(fr.state_at_flag[1] - phi) < 0.02)
-                    ls_candidates.push_back(fr);
-        } else {
-            ls_candidates = all_flags;
-        }
-
-        auto ls_pts  = hstarGreedy(ls_candidates, theta, phi, 12, drop_phi);
-        int  min_pts = drop_phi ? 3 : 6;
-
-        //std::fprintf(stderr, "[DBG]   h* selected %d/%d candidates\n",
-        //             (int)ls_pts.size(), (int)ls_candidates.size());
-
-        if ((int)ls_pts.size() >= min_pts) {
-            int n    = (int)ls_pts.size();
-            int ncol = drop_phi ? 3 : 6;
-
-            Eigen::MatrixXd X(n, ncol), Y(n, 2);
-            for (int i = 0; i < n; ++i) {
-                double tf = ls_pts[i].state_at_flag[0];
-                double pf = ls_pts[i].state_at_flag[1];
-                X(i, 0) = tf * tf;
-                X(i, 1) = tf;
-                if (!drop_phi) { X(i, 2) = tf * pf; X(i, 3) = pf * pf; X(i, 4) = pf; X(i, 5) = 1.0; }
-                else           { X(i, 2) = 1.0; }
-                Y(i, 0) = ls_pts[i].state_at_flag[2];
-                Y(i, 1) = ls_pts[i].state_at_flag[3];
-            }
-
-            //Eigen::JacobiSVD<Eigen::MatrixXd> svd(X);
-            //Eigen::VectorXd sv = svd.singularValues();
-            //double cond = (sv(sv.size()-1) > 0.0) ? sv(0)/sv(sv.size()-1) : 1e18;
-            //std::fprintf(stderr, "[LS_COND] cond=%.3e\n", cond);
-
-            auto qr = X.colPivHouseholderQr();
-            if (qr.rank() >= ncol) {
-                Eigen::MatrixXd A = qr.solve(Y);
-                Eigen::VectorXd xt(ncol);
-                if (drop_phi) xt << theta * theta, theta, 1.0;
-                else          xt << theta * theta, theta, theta * phi, phi * phi, phi, 1.0;
-                Eigen::Vector2d lam = A.transpose() * xt;
-                double l1 = lam(0), l2 = lam(1);
-
-                if (std::abs(l1) < 1e6 && std::abs(l2) < 1e6) {
-                    double resid = forwardResidual(theta, phi, l1, l2, params);
-                    if (resid < best.forward_residual)
-                        best = {l1, l2, resid, resid < params.epsilon_fwd, best.best_psi};
-                    //std::fprintf(stderr,
-                    //    "[LIN] n=%d  lambda=(%.6f,%.6f)  fwd_resid=%.3e\n",
-                    //    n, l1, l2, resid);
-                }
-                //else std::fprintf(stderr, "[LIN] lambda exploded\n");
-            }
-            //else std::fprintf(stderr, "[LIN] rank deficient\n");
+        // LS from accumulated flags
+        LSResult ls = runLS(all_flags, theta, phi, drop_phi);
+        if (ls.ok) {
+            double resid = forwardResidual(theta, phi, ls.l1, ls.l2, params);
+            if (resid < best.forward_residual)
+                best = {ls.l1, ls.l2, resid, resid < params.epsilon_fwd, best.best_psi};
         }
 
         if (best.accepted) break;
@@ -378,7 +505,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
     //std::fprintf(stderr, "[DBG] final lambda=(%.6f,%.6f) fwd_resid=%.3e\n",
     //             best.lambda1, best.lambda2, best.forward_residual);
 
-    // --- Newton refinement from best estimate + diverse ψ-wells ---
+    // Newton refinement from best estimate + diverse ψ-wells
     {
         CostateEstimate nr = newtonRefine(theta, phi,
                                           best.lambda1, best.lambda2, params);
@@ -386,11 +513,10 @@ CostateEstimate solveAtPoint(double theta, double phi,
             best = {nr.lambda1, nr.lambda2, nr.forward_residual, nr.accepted, best.best_psi};
 
         if (!best.accepted && !all_flags.empty()) {
-            const int    K_wells  = 2;
-            const double psi_gap  = 0.3;
+            const int    K_wells  = 4;
+            const double psi_gap  = M_PI / 4.0;
             std::vector<bool> excluded(all_flags.size(), false);
 
-            // Exclude ψ-neighborhood of current best so wells are diverse
             for (int i = 0; i < (int)all_flags.size(); ++i) {
                 double dp = std::abs(all_psi[i] - best.best_psi);
                 if (dp > M_PI) dp = 2*M_PI - dp;
