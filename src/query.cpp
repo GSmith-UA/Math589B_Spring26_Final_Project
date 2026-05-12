@@ -65,7 +65,10 @@ QueryResult queryManifold(double theta_q, double phi_q,
     QueryResult best = {0.0, 0.0, 1e18, theta_q, 1e18, false};
 
     auto res = continuationWalk(theta_q, phi_q, params);
-    if (res.has_value()) {
+    // Only report success when the costate estimate was actually accepted
+    // (forward residual < epsilon_fwd).  Without this guard, a failed sweep
+    // returns (λ1=0, λ2=0) with a spurious cost and pollutes the k-loop min.
+    if (res.has_value() && res->accepted) {
         double cost = computeCost(theta_q, phi_q,
                                   res->lambda1, res->lambda2, params);
         best = {res->lambda1, res->lambda2, res->forward_residual, theta_q, cost, true};
