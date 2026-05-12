@@ -284,7 +284,7 @@ static PatchCandidate refinePatchNewton(const StableBasis& basis,
                                           double alpha) {
     const double T = 20.0;
     const int steps = 2600;
-    const int max_iter = 11;
+    const int max_iter = 13;
 
     double a = a0;
     double b = b0;
@@ -504,7 +504,7 @@ Result solve(double theta, double phi, double alpha) {
     best_global.cost      = 1.0e300;
     best_global.residual2 = 1.0e300;
     best_global.ok        = 0;
-    const double DIST2_OK = 1.0e-9;
+    const double DIST2_OK = 1.0e-10;
 
     for (int w : unique_wells) {
         const double theta_shifted = theta - TWO_PI * static_cast<double>(w);
