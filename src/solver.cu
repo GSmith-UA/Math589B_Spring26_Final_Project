@@ -529,7 +529,7 @@ Result solve(double theta, double phi, double alpha) {
     const double value = 0.5 * (theta * costate(0) + phi * costate(1));
 
     return {costate(0), costate(1), value};
-}}
+}
 
 std::vector<Result> solve_many(
     const std::vector<double>& theta,
