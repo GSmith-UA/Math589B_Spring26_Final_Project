@@ -68,7 +68,7 @@ static CostateEstimate newtonRefine(double theta, double phi,
     double best_resid = forwardResidual(theta, phi, l1, l2, params);
     double best_l1 = l1, best_l2 = l2;
 
-    for (int iter = 0; iter < 5 && best_resid > params.epsilon_fwd; ++iter) {
+    for (int iter = 0; iter < 5 && best_resid > 1e-7; ++iter) {
         double th = theta, ph = phi, lam1 = l1, lam2 = l2;
         // Φ columns: pa = dz/dl1(0), pb = dz/dl2(0)
         double pa[4] = {0, 0, 1, 0};
