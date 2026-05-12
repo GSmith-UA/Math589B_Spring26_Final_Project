@@ -54,8 +54,8 @@ static double forwardResidual(double theta, double phi,
 }
 
 // Greedy h* point selection using quadratic features.
-// drop_phi=false: features = [θ², θ, φ, 1]  (4D)
-// drop_phi=true:  features = [θ², θ, 1]     (3D)
+// drop_phi=false: features = [θ², θ, φ², φ, 1]  (5D)
+// drop_phi=true:  features = [θ², θ, 1]          (3D)
 static std::vector<FlagResult> hstarGreedy(
         const std::vector<FlagResult>& flags,
         double theta, double phi,
@@ -64,11 +64,11 @@ static std::vector<FlagResult> hstarGreedy(
         double lambda_reg = 1e-6,
         double eps_info   = 1e-10)
 {
-    int dim = drop_phi ? 3 : 4;
+    int dim = drop_phi ? 3 : 5;
 
     Eigen::VectorXd x_star(dim);
     if (drop_phi) x_star << theta * theta, theta, 1.0;
-    else          x_star << theta * theta, theta, phi, 1.0;
+    else          x_star << theta * theta, theta, phi * phi, phi, 1.0;
 
     Eigen::MatrixXd XtX_inv = (1.0 / lambda_reg) * Eigen::MatrixXd::Identity(dim, dim);
 
@@ -85,7 +85,7 @@ static std::vector<FlagResult> hstarGreedy(
             double pf = flags[i].state_at_flag[1];
             Eigen::VectorXd xf(dim);
             if (drop_phi) xf << tf * tf, tf, 1.0;
-            else          xf << tf * tf, tf, pf, 1.0;
+            else          xf << tf * tf, tf, pf * pf, pf, 1.0;
             Eigen::VectorXd v = XtX_inv * xf;
             double denom = 1.0 + xf.dot(v);
             if (denom <= 0.0) continue;
@@ -99,7 +99,7 @@ static std::vector<FlagResult> hstarGreedy(
         double pf = flags[best_idx].state_at_flag[1];
         Eigen::VectorXd xf(dim);
         if (drop_phi) xf << tf * tf, tf, 1.0;
-        else          xf << tf * tf, tf, pf, 1.0;
+        else          xf << tf * tf, tf, pf * pf, pf, 1.0;
         Eigen::VectorXd v = XtX_inv * xf;
         XtX_inv -= v * v.transpose() / (1.0 + xf.dot(v));
 
@@ -182,10 +182,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
 
         if (pass_has_best) {
             psi_center = pass_best_psi;
-            // pass 0 (2π) → π/2; subsequent passes halve further, floor at π/8
-            arc = (arc > M_PI / 2.0 + 1e-9)
-                      ? M_PI / 2.0
-                      : std::max(arc / 2.0, M_PI / 8.0);
+            arc        = M_PI / 2.0;
         } else {
             arc = std::min(arc * 2.0, 2.0 * M_PI);
         }
@@ -209,14 +206,14 @@ CostateEstimate solveAtPoint(double theta, double phi,
         }
 
         auto ls_pts  = hstarGreedy(ls_candidates, theta, phi, 12, drop_phi);
-        int  min_pts = drop_phi ? 3 : 4;
+        int  min_pts = drop_phi ? 3 : 5;
 
         //std::fprintf(stderr, "[DBG]   h* selected %d/%d candidates\n",
         //             (int)ls_pts.size(), (int)ls_candidates.size());
 
         if ((int)ls_pts.size() >= min_pts) {
             int n    = (int)ls_pts.size();
-            int ncol = drop_phi ? 3 : 4;
+            int ncol = drop_phi ? 3 : 5;
 
             Eigen::MatrixXd X(n, ncol), Y(n, 2);
             for (int i = 0; i < n; ++i) {
@@ -224,7 +221,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
                 double pf = ls_pts[i].state_at_flag[1];
                 X(i, 0) = tf * tf;
                 X(i, 1) = tf;
-                if (!drop_phi) { X(i, 2) = pf; X(i, 3) = 1.0; }
+                if (!drop_phi) { X(i, 2) = pf * pf; X(i, 3) = pf; X(i, 4) = 1.0; }
                 else           { X(i, 2) = 1.0; }
                 Y(i, 0) = ls_pts[i].state_at_flag[2];
                 Y(i, 1) = ls_pts[i].state_at_flag[3];
@@ -240,7 +237,7 @@ CostateEstimate solveAtPoint(double theta, double phi,
                 Eigen::MatrixXd A = qr.solve(Y);
                 Eigen::VectorXd xt(ncol);
                 if (drop_phi) xt << theta * theta, theta, 1.0;
-                else          xt << theta * theta, theta, phi, 1.0;
+                else          xt << theta * theta, theta, phi * phi, phi, 1.0;
                 Eigen::Vector2d lam = A.transpose() * xt;
                 double l1 = lam(0), l2 = lam(1);
 
