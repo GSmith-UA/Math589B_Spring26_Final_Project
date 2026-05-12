@@ -10,9 +10,9 @@ Result solve(double theta, double phi, double alpha) {
     ContinuationParams p;
     p.alpha      = alpha;
     p.h          = 1e-4;
-    p.h_shoot    = 3e-4;
+    p.h_shoot    = 5e-5;
     p.delta_step = 0.01;
-    p.T_max      = 60.0;
+    p.T_max      = 20.0;
     p.r          = 1e-3;
     p.epsilon_init = 1e-2;
     p.epsilon_fwd  = 1e-3;
