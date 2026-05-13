@@ -290,7 +290,7 @@ static PatchCandidate refinePatchNewton(const StableBasis& basis,
                                           double alpha) {
     const double T = 20.0;
     const int steps = 2600;
-    const int max_iter = 13;
+    const int max_iter = 15;
 
     double a = a0;
     double b = b0;
