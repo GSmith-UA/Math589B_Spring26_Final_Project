@@ -224,41 +224,6 @@ static void launchPatchKernel(PatchCandidate* out,
     out[idx] = c;
 }
 
-// Build the two most stable eigenvectors of the linearized PMP system.
-static Eigen::Matrix<double, 4, 2> computeStableSubspace(double alpha) {
-    Eigen::Matrix4d A;
-
-    A << 0.0,    1.0,    0.0,    0.0,
-         1.0,   -alpha,  0.0,   -1.0,
-        -1.0,    0.0,    0.0,   -1.0,
-         0.0,   -1.0,   -1.0,    alpha;
-
-    Eigen::EigenSolver<Eigen::Matrix4d> es(A);
-
-    std::vector<std::pair<double, int>> idx;
-
-    for (int i = 0; i < 4; ++i) {
-        idx.emplace_back(es.eigenvalues()(i).real(), i);
-    }
-
-    std::sort(idx.begin(), idx.end());
-
-    Eigen::Matrix<std::complex<double>, 4, 2> Vc;
-    Vc.col(0) = es.eigenvectors().col(idx[0].second);
-    Vc.col(1) = es.eigenvectors().col(idx[1].second);
-
-    Eigen::Matrix<double, 4, 2> Vs = Vc.real();
-
-    for (int j = 0; j < 2; ++j) {
-        const double n = Vs.col(j).norm();
-        if (n > 0.0) {
-            Vs.col(j) /= n;
-        }
-    }
-//so we got our stable subsapce basis 
-    return Vs;
-}
-
 //CPU function, do the same kind of integration as the GPU kernel, but for one candidate.
 //Very important to have this on the CPU so we can do the Newton refinement step that uses sequential integrations.
 static Eigen::Matrix2d computeStableGain(double alpha) {
