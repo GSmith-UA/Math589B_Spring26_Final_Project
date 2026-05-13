@@ -441,10 +441,10 @@ static std::vector<PatchCandidate> runPatchSearchGpu(double theta,
     }
 
     GPU_CHECK(cudaFree(d_out));
-//CPU sorts candidates by distance (descending for variation).
+//CPU sorts candidates by distance.
     std::sort(all.begin(), all.end(),
               [](const PatchCandidate& x, const PatchCandidate& y) {
-                  return x.residual2 > y.residual2;  // changed to descending
+                  return x.residual2 < y.residual2;
               });
 
     return all;
@@ -471,8 +471,8 @@ static PatchCandidate searchWellCandidates(const StableBasis& basis,
     best.ok        = 0;
 
     const int trials = std::min<int>(max_trials, static_cast<int>(seeds.size()));
-    //CPU refines the best few GPU seeds (now sorted descending, so start from end).
-    for (int i = trials - 1; i >= 0; --i) {
+    //CPU refines the best few GPU seeds.
+    for (int i = 0; i < trials; ++i) {
         PatchCandidate c = refinePatchNewton(basis,
                                             seeds[i].coeff_a,
                                             seeds[i].coeff_b,
